@@ -1,21 +1,22 @@
 {
   "expo": {
-    "name": "expo-analytics-example",
+    "name": "ExpoAnalytics Example",
     "slug": "expo-analytics-example",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "expo.modules.analytics.example",
-      "appleTeamId": "7QN32NCZ53",
+      "bundleIdentifier": "com.yourcompany.expo.analytics.example",
       "infoPlist": {
         "UIBackgroundModes": [
           "processing",
@@ -25,24 +26,32 @@
         "BGTaskSchedulerPermittedIdentifiers": [
           "com.expo.analytics.upload",
           "com.expo.analytics.sync"
-        ]
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#FFFFFF"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "expo.modules.analytics.example"
+      "package": "com.yourcompany.expo.analytics.example"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "6a8d86b3-65c7-42e8-ac95-e3b8049faea2"
-      }
-    }
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "12.0"
+          }
+        }
+      ]
+    ]
   }
-}
+} 

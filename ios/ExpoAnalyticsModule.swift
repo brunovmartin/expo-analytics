@@ -133,7 +133,7 @@ extension UIWindow {
   }
 }
 
-public class ExpoAnalyticsModule: Module {
+public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   private var displayLink: CADisplayLink?
   private var framerate: Int = 30
   private var frameCount: Int = 0
@@ -153,6 +153,9 @@ public class ExpoAnalyticsModule: Module {
   // Controle de sessão
   private var currentSessionId: String = ""
   private var sessionStartTime: Date?
+  
+  // Background task para garantir upload completo
+  private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
   private let screenshotsFolder: URL = {
     let tmp = FileManager.default.temporaryDirectory
@@ -168,6 +171,7 @@ public class ExpoAnalyticsModule: Module {
     OnAppEntersBackground {
       NSLog("🔄 [ExpoAnalytics] App entrando em background - finalizando sessão")
       if self.recordScreenEnabled && self.frameCount > 0 {
+        self.startBackgroundTask()
         self.finishCurrentSession()
       }
     }
@@ -295,9 +299,9 @@ public class ExpoAnalyticsModule: Module {
       // Iniciar captura apenas se record screen estiver ativo
       if self.recordScreenEnabled {
         DispatchQueue.main.async { [weak self] in
-          guard let self = self else { return }
-          self.startNewSession()
-          self.startOptimizedCapture()
+          guard let strongSelf = self else { return }
+          strongSelf.startNewSession()
+          strongSelf.startOptimizedCapture()
         }
       } else {
         NSLog("⚠️ [ExpoAnalytics] Record Screen desabilitado - captura não iniciada")
@@ -307,11 +311,11 @@ public class ExpoAnalyticsModule: Module {
     AsyncFunction("stop") { () in
       NSLog("⏹️ [ExpoAnalytics] Stop chamado - finalizando sessão atual")
       DispatchQueue.main.async { [weak self] in
-        guard let self = self else { return }
-        if self.recordScreenEnabled && self.frameCount > 0 {
-          self.finishCurrentSession()
+        guard let strongSelf = self else { return }
+        if strongSelf.recordScreenEnabled && strongSelf.frameCount > 0 {
+          strongSelf.finishCurrentSession()
         }
-        self.stopCapture()
+        strongSelf.stopCapture()
       }
     }
 
@@ -676,8 +680,15 @@ public class ExpoAnalyticsModule: Module {
     request.httpBody = body
       
       let startTime = Date()
-      URLSession.shared.dataTask(with: request) { data, response, error in
+      URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
         let duration = Date().timeIntervalSince(startTime)
+        
+        defer {
+          // SEMPRE finalizar background task ao completar upload
+          DispatchQueue.main.async { [weak self] in
+            self?.endBackgroundTask()
+          }
+        }
         
         if let error = error {
         NSLog("❌ [ExpoAnalytics] Erro no upload da sessão: \(error.localizedDescription)")
@@ -689,13 +700,13 @@ public class ExpoAnalyticsModule: Module {
           NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
           
           if statusCode == 200 {
-          NSLog("🎉 [ExpoAnalytics] Sessão \(self.currentSessionId) enviada com sucesso!")
+          NSLog("🎉 [ExpoAnalytics] Sessão \(self?.currentSessionId ?? "unknown") enviada com sucesso!")
             
             // Limpar screenshots locais apenas se upload foi bem-sucedido
           DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-              self.clearLocalScreenshots()
-              self.frameCount = 0
+            guard let strongSelf = self else { return }
+              strongSelf.clearLocalScreenshots()
+              strongSelf.frameCount = 0
             }
           } else {
           NSLog("⚠️ [ExpoAnalytics] Upload da sessão com status não-200, mantendo arquivos locais")
@@ -934,6 +945,34 @@ public class ExpoAnalyticsModule: Module {
     }
   }
   
+  // MARK: - Background Task Management
+  
+  private func startBackgroundTask() {
+    guard backgroundTaskID == .invalid else {
+      NSLog("🔄 [ExpoAnalytics] Background task já está ativo")
+      return
+    }
+    
+    backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "ExpoAnalyticsUpload") { [weak self] in
+      NSLog("⏰ [ExpoAnalytics] Background task expirou - finalizando...")
+      self?.endBackgroundTask()
+    }
+    
+    if backgroundTaskID != .invalid {
+      NSLog("🎯 [ExpoAnalytics] Background task iniciado: \(backgroundTaskID.rawValue)")
+    } else {
+      NSLog("❌ [ExpoAnalytics] Falha ao iniciar background task")
+    }
+  }
+  
+  private func endBackgroundTask() {
+    guard backgroundTaskID != .invalid else { return }
+    
+    NSLog("✅ [ExpoAnalytics] Finalizando background task: \(backgroundTaskID.rawValue)")
+    UIApplication.shared.endBackgroundTask(backgroundTaskID)
+    backgroundTaskID = .invalid
+  }
+  
   // MARK: - Device Information Functions
   
   private func getIOSVersion() -> String {
@@ -1080,8 +1119,19 @@ public class ExpoAnalyticsModule: Module {
         NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB (incluindo alertas)")
         
         // Enviar screenshot para o servidor em background
-        Task {
+        Task { @MainActor [weak self] in
+          guard let self = self else {
+            continuation.resume(returning: [
+              "success": false,
+              "error": "Módulo foi desalocado"
+            ])
+            return
+          }
+          
+          // Iniciar background task para upload manual
+          self.startBackgroundTask()
           let success = await self.sendManualScreenshotToServer(imageData: imageData, width: width, height: height, compression: compression)
+          // Background task será finalizado dentro de sendManualScreenshotToServer
           
           if success {
             continuation.resume(returning: [
@@ -1104,6 +1154,13 @@ public class ExpoAnalyticsModule: Module {
   
   private func sendManualScreenshotToServer(imageData: Data, width: Int, height: Int, compression: Double) async -> Bool {
     let timestamp = Date().timeIntervalSince1970
+    
+    defer {
+      // SEMPRE finalizar background task ao completar upload manual
+      DispatchQueue.main.async { [weak self] in
+        self?.endBackgroundTask()
+      }
+    }
     
     let payload: [String: Any] = [
       "userId": self.userId,
@@ -1131,7 +1188,7 @@ public class ExpoAnalyticsModule: Module {
       
       NSLog("📤 [ExpoAnalytics] Enviando screenshot manual para servidor...")
       
-      let (data, response) = try await URLSession.shared.data(for: request)
+      let (_, response) = try await URLSession.shared.data(for: request)
       
       if let httpResponse = response as? HTTPURLResponse {
         let statusCode = httpResponse.statusCode

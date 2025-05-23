@@ -13,7 +13,9 @@
     "prepublishOnly": "expo-module prepublishOnly",
     "expo-module": "expo-module",
     "open:ios": "xed example/ios",
-    "open:android": "open -a \"Android Studio\" example/android"
+    "open:android": "open -a \"Android Studio\" example/android",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "keywords": [
     "react-native",
@@ -28,7 +30,11 @@
   "author": "Bruno Verçosa <bruno.vmartins@hotmail.com> (https://github.com/brunovmartin)",
   "license": "MIT",
   "homepage": "https://github.com/brunovmartin/expo-analytics#readme",
-  "dependencies": {},
+  "dependencies": {
+    "expo": "~53.0.9",
+    "react": "19.0.0",
+    "react-native": "0.79.2"
+  },
   "devDependencies": {
     "@types/react": "~19.0.0",
     "expo-module-scripts": "^4.1.6",

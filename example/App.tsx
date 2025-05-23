@@ -10,7 +10,7 @@ import ComprehensiveUITestExample from './examples/ComprehensiveUITestExample';
 
 export default function App() {
     const [isRecording, setIsRecording] = useState(false);
-    const [apiHost, setApiHost] = useState('http://localhost:8080');
+    const [apiHost, setApiHost] = useState('http://192.168.18.4:8080');
     const [appConfig, setAppConfig] = useState<any>(null);
     const [configLoading, setConfigLoading] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string>('');
@@ -85,12 +85,7 @@ export default function App() {
         }
 
         try {
-            await ExpoAnalytics.start({
-                userData: {
-                    customData: 'example-value'
-                }
-            });
-            
+            await ExpoAnalytics.start();
             setIsRecording(true);
             console.log('✅ ExpoAnalytics iniciado com usuário:', currentUserId);
             Alert.alert('Sucesso', `Analytics iniciado com usuário: ${currentUserId}`);
@@ -199,12 +194,7 @@ export default function App() {
     const startTracking = async () => {
         try {
             console.log('🎬 Iniciando tracking...');
-            
-            await ExpoAnalytics.start({
-                framerate: 10,
-                screenSize: 480
-            });
-            
+            await ExpoAnalytics.start();
             console.log('✅ Tracking iniciado');
             Alert.alert('Sucesso', 'Tracking iniciado!');
         } catch (error) {
