@@ -122,6 +122,17 @@ struct ZipEndOfCentralDirectory {
     }
 }
 
+// Extension para debug de janelas
+extension UIWindow {
+  var analyticsDebugDescription: String {
+    let className = String(describing: type(of: self))
+    let level = windowLevel.rawValue
+    let isKey = isKeyWindow ? "(KEY)" : ""
+    let hidden = isHidden ? "(HIDDEN)" : "(VISIBLE)"
+    return "\(className) - Level: \(level) \(isKey) \(hidden)"
+  }
+}
+
 public class ExpoAnalyticsModule: Module {
   private var displayLink: CADisplayLink?
   private var framerate: Int = 30
@@ -521,11 +532,24 @@ public class ExpoAnalyticsModule: Module {
   }
   
   private func performScreenCapture() {
-    guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-          let window = windowScene.windows.first else { return }
+    guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
 
     DispatchQueue.main.sync {
-    let originalBounds = window.bounds
+      // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+      let allWindows = windowScene.windows.filter { $0.isHidden == false }
+      guard !allWindows.isEmpty else { return }
+      
+      // Log de debug para mostrar janelas being capturadas
+      if frameCount % 60 == 0 { // Log apenas ocasionalmente para não sobrecarregar
+        NSLog("🔍 [ExpoAnalytics] Capturando \(allWindows.count) janelas:")
+        for (index, window) in allWindows.enumerated() {
+          NSLog("   \(index + 1). \(window.analyticsDebugDescription)")
+        }
+      }
+      
+      // Pegar a janela principal para obter as dimensões
+      let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
+      let originalBounds = mainWindow.bounds
     
       // Calcular escala para reduzir a resolução desde o início
       let targetSize = self.screenSize
@@ -542,15 +566,21 @@ public class ExpoAnalyticsModule: Module {
       
       // Aplicar transformação para redimensionar durante a captura
       context.scaleBy(x: scaleX, y: scaleY)
-    window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      
+      // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
+      let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+      
+      for window in sortedWindows {
+        window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      }
       
       let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
-    UIGraphicsEndImageContext()
+      UIGraphicsEndImageContext()
 
       guard let image = capturedImage else { 
-      NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
-      return 
-    }
+        NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
+        return 
+      }
     
       // Processar imagem em background
       captureQueue.async { [weak self] in
@@ -983,16 +1013,27 @@ public class ExpoAnalyticsModule: Module {
   private func captureManualScreenshot(width: Int, height: Int, compression: Double) async -> [String: Any] {
     return await withCheckedContinuation { continuation in
       DispatchQueue.main.async {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = windowScene.windows.first else {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
           continuation.resume(returning: [
             "success": false,
-            "error": "Não foi possível acessar a janela principal"
+            "error": "Não foi possível acessar a cena da janela"
           ])
           return
         }
         
-        let originalBounds = window.bounds
+        // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+        let allWindows = windowScene.windows.filter { $0.isHidden == false }
+        guard !allWindows.isEmpty else {
+          continuation.resume(returning: [
+            "success": false,
+            "error": "Nenhuma janela visível encontrada"
+          ])
+          return
+        }
+        
+        // Pegar a janela principal para obter as dimensões
+        let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
+        let originalBounds = mainWindow.bounds
         let targetSize = CGSize(width: width, height: height)
         let scaleX = targetSize.width / originalBounds.width
         let scaleY = targetSize.height / originalBounds.height
@@ -1008,7 +1049,13 @@ public class ExpoAnalyticsModule: Module {
         }
         
         context.scaleBy(x: scaleX, y: scaleY)
-        window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+        
+        // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
+        let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+        
+        for window in sortedWindows {
+          window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+        }
         
         let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
@@ -1030,7 +1077,7 @@ public class ExpoAnalyticsModule: Module {
           return
         }
         
-        NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB")
+        NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB (incluindo alertas)")
         
         // Enviar screenshot para o servidor em background
         Task {
@@ -1104,16 +1151,24 @@ public class ExpoAnalyticsModule: Module {
   }
 
   private func captureScreenshotForEvent() -> Data? {
-    guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-          let window = windowScene.windows.first else { 
-      NSLog("❌ [ExpoAnalytics] Não foi possível capturar screenshot para evento")
+    guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { 
+      NSLog("❌ [ExpoAnalytics] Não foi possível acessar a cena da janela para capturar screenshot do evento")
       return nil 
+    }
+    
+    // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+    let allWindows = windowScene.windows.filter { $0.isHidden == false }
+    guard !allWindows.isEmpty else {
+      NSLog("❌ [ExpoAnalytics] Nenhuma janela visível encontrada para capturar screenshot do evento")
+      return nil
     }
     
     var capturedImage: UIImage?
     
     DispatchQueue.main.sync {
-      let originalBounds = window.bounds
+      // Pegar a janela principal para obter as dimensões
+      let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
+      let originalBounds = mainWindow.bounds
       
       // Usar tamanho menor para eventos (320x640 para economizar dados)
       let eventScreenSize = CGSize(width: 320, height: 640)
@@ -1128,7 +1183,13 @@ public class ExpoAnalyticsModule: Module {
       }
       
       context.scaleBy(x: scaleX, y: scaleY)
-      window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      
+      // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
+      let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+      
+      for window in sortedWindows {
+        window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      }
       
       capturedImage = UIGraphicsGetImageFromCurrentImageContext()
       UIGraphicsEndImageContext()

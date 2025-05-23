@@ -1,8 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Alert, ScrollView, Switch, Button } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Alert, ScrollView, Switch, Button, Modal } from 'react-native';
 import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ExpoAnalytics from 'expo-analytics';
+
+// Importar os componentes de teste de overlays
+import AlertCaptureExample from './examples/AlertCaptureExample';
+import ComprehensiveUITestExample from './examples/ComprehensiveUITestExample';
 
 export default function App() {
     const [isRecording, setIsRecording] = useState(false);
@@ -11,6 +15,10 @@ export default function App() {
     const [configLoading, setConfigLoading] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string>('');
     const [isInitialized, setIsInitialized] = useState(false);
+
+    // Estados para navegação entre telas de teste de overlays
+    const [showOverlayTests, setShowOverlayTests] = useState(false);
+    const [currentOverlayScreen, setCurrentOverlayScreen] = useState<'alert' | 'comprehensive' | null>(null);
 
     useEffect(() => {
         // Inicializar userId persistente e buscar configurações
@@ -486,6 +494,33 @@ export default function App() {
                     <Button title="Atualizar Informações" onPress={updateUserInfo} color="#2196F3" />
                 </View>
 
+                {/* NOVA SEÇÃO: Testes de Overlays */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>🚨 Testes de Overlays</Text>
+                    <Text style={styles.note}>
+                        Teste a nova funcionalidade de captura de alertas, modais e overlays em screenshots
+                    </Text>
+                    
+                    <View style={styles.buttonGroup}>
+                        <Button 
+                            title="🚨 Teste de Alertas" 
+                            onPress={() => {
+                                setCurrentOverlayScreen('alert');
+                                setShowOverlayTests(true);
+                            }}
+                            color="#FF6B35" 
+                        />
+                        <Button 
+                            title="🎭 Teste Completo de UI" 
+                            onPress={() => {
+                                setCurrentOverlayScreen('comprehensive');
+                                setShowOverlayTests(true);
+                            }}
+                            color="#6A4C93" 
+                        />
+                    </View>
+                </View>
+
                 <View style={styles.info}>
                     <Text style={styles.infoTitle}>ℹ️ Informações</Text>
                     <Text style={styles.infoText}>
@@ -497,6 +532,41 @@ export default function App() {
                     </Text>
                 </View>
             </ScrollView>
+
+            {/* Modais para telas de teste de overlays */}
+            <Modal
+                visible={showOverlayTests}
+                animationType="slide"
+                presentationStyle="fullScreen"
+                onRequestClose={() => {
+                    setShowOverlayTests(false);
+                    setCurrentOverlayScreen(null);
+                }}
+            >
+                <View style={styles.modalContainer}>
+                    {/* Header do Modal */}
+                    <View style={styles.modalHeader}>
+                        <TouchableOpacity
+                            style={styles.closeButton}
+                            onPress={() => {
+                                setShowOverlayTests(false);
+                                setCurrentOverlayScreen(null);
+                            }}
+                        >
+                            <Text style={styles.closeButtonText}>← Voltar</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.modalTitle}>
+                            {currentOverlayScreen === 'alert' ? 'Teste de Alertas' : 'Teste Completo de UI'}
+                        </Text>
+                    </View>
+                    
+                    {/* Conteúdo do Modal */}
+                    <View style={styles.modalContent}>
+                        {currentOverlayScreen === 'alert' && <AlertCaptureExample />}
+                        {currentOverlayScreen === 'comprehensive' && <ComprehensiveUITestExample />}
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -761,5 +831,37 @@ const styles = StyleSheet.create({
         fontSize: 14,
         lineHeight: 20,
         color: '#333',
+    },
+    modalContainer: {
+        flex: 1,
+        backgroundColor: 'white',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 15,
+        backgroundColor: '#3b82f6',
+        paddingTop: 50, // Espaço para status bar
+    },
+    closeButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+    },
+    closeButtonText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: 'white',
+    },
+    modalTitle: {
+        flex: 1,
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginLeft: 10,
+        color: 'white',
+        textAlign: 'center',
+        marginRight: 60, // Compensar botão de voltar
+    },
+    modalContent: {
+        flex: 1,
     },
 });
