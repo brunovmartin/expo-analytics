@@ -41,6 +41,97 @@ function getApp($baseDir, $bundleId) {
     return null;
 }
 
+// Função para obter eventos de um usuário específico
+function getUserEvents($baseDir, $userId) {
+    $events = [];
+    $userEventsDir = $baseDir . '/events/' . $userId;
+    
+    if (is_dir($userEventsDir)) {
+        // Procurar recursivamente por arquivos .jsonl
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($userEventsDir, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        
+        foreach ($iterator as $file) {
+            if ($file->isFile() && pathinfo($file, PATHINFO_EXTENSION) === 'jsonl') {
+                $lines = file($file->getPathname(), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                
+                foreach ($lines as $line) {
+                    $event = json_decode($line, true);
+                    if ($event) {
+                        $events[] = $event;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Ordenar eventos por timestamp (mais recentes primeiro)
+    usort($events, function($a, $b) {
+        return ($b['timestamp'] ?? 0) - ($a['timestamp'] ?? 0);
+    });
+    
+    return $events;
+}
+
+// Função para obter todos os eventos (para estatísticas)
+function getAllEvents($baseDir, $selectedApp = null) {
+    $events = [];
+    $eventsDir = $baseDir . '/events';
+    
+    if (!is_dir($eventsDir)) {
+        return $events;
+    }
+    
+    $users = array_diff(scandir($eventsDir), ['.', '..']);
+    
+    foreach ($users as $userId) {
+        $userPath = $eventsDir . '/' . $userId;
+        
+        if (is_dir($userPath) && !str_starts_with($userId, '.')) {
+            $userEvents = getUserEvents($baseDir, $userId);
+            $events = array_merge($events, $userEvents);
+        }
+    }
+    
+    return $events;
+}
+
+// Função para obter linha do tempo de eventos de um usuário
+function getUserTimeline($baseDir, $userId) {
+    $events = getUserEvents($baseDir, $userId);
+    $timeline = [];
+    
+    foreach ($events as $event) {
+        $date = date('Y-m-d', $event['timestamp']);
+        $time = date('H:i:s', $event['timestamp']);
+        
+        if (!isset($timeline[$date])) {
+            $timeline[$date] = [];
+        }
+        
+        $timeline[$date][] = [
+            'time' => $time,
+            'timestamp' => $event['timestamp'],
+            'event' => $event['event'] ?? 'unknown',
+            'value' => $event['value'] ?? '',
+            'geo' => $event['geo'] ?? []
+        ];
+    }
+    
+    // Ordenar dias (mais recentes primeiro)
+    krsort($timeline);
+    
+    // Ordenar eventos do dia (mais recentes primeiro)
+    foreach ($timeline as $date => &$dayEvents) {
+        usort($dayEvents, function($a, $b) {
+            return $b['timestamp'] - $a['timestamp'];
+        });
+    }
+    
+    return $timeline;
+}
+
 // Função para obter estatísticas filtradas por app
 function getStats($baseDir, $selectedApp = null) {
     $stats = [
@@ -48,47 +139,63 @@ function getStats($baseDir, $selectedApp = null) {
         'totalSessions' => 0,
         'totalEvents' => 0,
         'totalScreenshots' => 0,
+        'totalVideos' => 0,
         'recentUsers' => [],
         'topEvents' => []
     ];
     
     if (!is_dir($baseDir)) return $stats;
     
-    // TODO: Implementar filtro por bundle ID quando tivermos essa informação nos dados
-    // Por enquanto, retorna todas as estatísticas
+    // Contar usuários únicos nos eventos
+    $uniqueUsers = [];
+    $allEvents = getAllEvents($baseDir, $selectedApp);
+    $eventTypes = [];
     
-    // Contar usuários
-    $usersDir = $baseDir . '/users';
-    if (is_dir($usersDir)) {
-        $users = array_diff(scandir($usersDir), ['.', '..']);
-        
-        $validUsers = [];
-        foreach ($users as $item) {
-            $itemPath = $usersDir . '/' . $item;
-            if (is_dir($itemPath) && !str_starts_with($item, '.')) {
-                $validUsers[] = $item;
-            }
+    foreach ($allEvents as $event) {
+        if (isset($event['userId'])) {
+            $uniqueUsers[$event['userId']] = true;
         }
         
-        $stats['totalUsers'] = count($validUsers);
-        
-        foreach ($validUsers as $userId) {
-            $latestFile = $usersDir . '/' . $userId . '/latest.json';
-            if (file_exists($latestFile)) {
-                $userData = json_decode(file_get_contents($latestFile), true);
-                $stats['recentUsers'][] = [
+        $eventName = $event['event'] ?? 'unknown';
+        if (!isset($eventTypes[$eventName])) {
+            $eventTypes[$eventName] = 0;
+        }
+        $eventTypes[$eventName]++;
+    }
+    
+    $stats['totalUsers'] = count($uniqueUsers);
+    $stats['totalEvents'] = count($allEvents);
+    
+    // Top eventos
+    arsort($eventTypes);
+    foreach (array_slice($eventTypes, 0, 5, true) as $eventName => $count) {
+        $stats['topEvents'][] = [
+            'name' => $eventName,
+            'count' => $count
+        ];
+    }
+    
+    // Usuários recentes baseados nos eventos
+    $recentUserEvents = [];
+    foreach ($allEvents as $event) {
+        if (isset($event['userId'])) {
+            $userId = $event['userId'];
+            if (!isset($recentUserEvents[$userId]) || $event['timestamp'] > $recentUserEvents[$userId]['lastSeen']) {
+                $recentUserEvents[$userId] = [
                     'userId' => $userId,
-                    'lastSeen' => $userData['receivedAt'] ?? 0,
-                    'userData' => $userData['userData'] ?? []
+                    'lastSeen' => $event['timestamp'],
+                    'userData' => $event['userData'] ?? []
                 ];
             }
         }
-        
-        usort($stats['recentUsers'], function($a, $b) {
-            return $b['lastSeen'] - $a['lastSeen'];
-        });
-        $stats['recentUsers'] = array_slice($stats['recentUsers'], 0, 10);
     }
+    
+    // Ordenar por último evento
+    uasort($recentUserEvents, function($a, $b) {
+        return $b['lastSeen'] - $a['lastSeen'];
+    });
+    
+    $stats['recentUsers'] = array_slice(array_values($recentUserEvents), 0, 10);
     
     // Contar sessões de screenshots
     $screenshotsDir = $baseDir . '/screenshots';
@@ -114,18 +221,17 @@ function getStats($baseDir, $selectedApp = null) {
         }
     }
     
-    // Contar eventos
-    $eventsDir = $baseDir . '/events';
-    if (is_dir($eventsDir)) {
-        $users = array_diff(scandir($eventsDir), ['.', '..']);
+    // Contar vídeos
+    $videosDir = $baseDir . '/videos';
+    if (is_dir($videosDir)) {
+        $users = array_diff(scandir($videosDir), ['.', '..']);
         
         foreach ($users as $userId) {
-            $userPath = $eventsDir . '/' . $userId;
+            $userPath = $videosDir . '/' . $userId;
             
             if (is_dir($userPath) && !str_starts_with($userId, '.')) {
-                foreach (glob($userPath . '/*/*/*.jsonl') as $eventFile) {
-                    $lines = file($eventFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                    $stats['totalEvents'] += count($lines);
+                foreach (glob($userPath . '/*/*.mp4') as $videoFile) {
+                    $stats['totalVideos']++;
                 }
             }
         }
@@ -169,19 +275,76 @@ function getUserSessions($baseDir, $userId) {
     return $sessions;
 }
 
+// Função para obter vídeos de um usuário
+function getUserVideos($baseDir, $userId) {
+    $videos = [];
+    $userVideosDir = $baseDir . '/videos/' . $userId;
+    
+    if (is_dir($userVideosDir)) {
+        foreach (glob($userVideosDir . '/*') as $dateDir) {
+            if (is_dir($dateDir)) {
+                $date = basename($dateDir);
+                $videoFiles = glob($dateDir . '/*.mp4');
+                $metadataFiles = glob($dateDir . '/metadata_*.json');
+                
+                foreach ($videoFiles as $videoFile) {
+                    $videoName = basename($videoFile);
+                    $videoSize = filesize($videoFile);
+                    
+                    // Buscar metadados correspondentes
+                    $metadata = null;
+                    $timestamp = null;
+                    
+                    // Extrair timestamp do nome do arquivo (formato: video_TIMESTAMP.mp4)
+                    if (preg_match('/video_(\d+)\.mp4/', $videoName, $matches)) {
+                        $timestamp = $matches[1];
+                        
+                        // Buscar arquivo de metadados correspondente
+                        $metadataFile = $dateDir . '/metadata_' . $timestamp . '.json';
+                        if (file_exists($metadataFile)) {
+                            $metadata = json_decode(file_get_contents($metadataFile), true);
+                        }
+                    }
+                    
+                    $videos[] = [
+                        'date' => $date,
+                        'filename' => $videoName,
+                        'path' => $videoFile,
+                        'size' => $videoSize,
+                        'timestamp' => $timestamp ? (int)$timestamp : filemtime($videoFile),
+                        'metadata' => $metadata
+                    ];
+                }
+            }
+        }
+    }
+    
+    // Ordenar por timestamp (mais recentes primeiro)
+    usort($videos, function($a, $b) {
+        return $b['timestamp'] - $a['timestamp'];
+    });
+    
+    return $videos;
+}
+
 // Função para obter dados detalhados de um usuário
 function getUserData($baseDir, $userId) {
     $userData = [
         'userId' => $userId,
         'latestInfo' => null,
         'allSessions' => [],
+        'allVideos' => [],
+        'allEvents' => [],
+        'timeline' => [],
         'totalEvents' => 0,
         'totalScreenshots' => 0,
+        'totalVideos' => 0,
         'geoData' => null,
         'firstSeen' => null,
         'lastSeen' => null
     ];
     
+    // Informações do usuário
     $latestFile = $baseDir . '/users/' . $userId . '/latest.json';
     if (file_exists($latestFile)) {
         $userData['latestInfo'] = json_decode(file_get_contents($latestFile), true);
@@ -189,43 +352,43 @@ function getUserData($baseDir, $userId) {
         $userData['geoData'] = $userData['latestInfo']['geo'] ?? null;
     }
     
-    $userScreenshotsDir = $baseDir . '/screenshots/' . $userId;
-    if (is_dir($userScreenshotsDir)) {
-        foreach (glob($userScreenshotsDir . '/*') as $sessionDir) {
-            if (is_dir($sessionDir)) {
-                $date = basename($sessionDir);
-                $screenshots = glob($sessionDir . '/*.jpg');
-                $metadataFiles = glob($sessionDir . '/metadata_*.json');
-                
-                $sessionData = [
-                    'date' => $date,
-                    'screenshotCount' => count($screenshots),
-                    'metadata' => null
-                ];
-                
-                if (!empty($metadataFiles)) {
-                    $metadata = json_decode(file_get_contents($metadataFiles[0]), true);
-                    $sessionData['metadata'] = $metadata;
-                    
-                    if (!$userData['firstSeen'] || $metadata['timestamp'] < $userData['firstSeen']) {
-                        $userData['firstSeen'] = $metadata['timestamp'];
-                    }
-                    if (!$userData['lastSeen'] || $metadata['timestamp'] > $userData['lastSeen']) {
-                        $userData['lastSeen'] = $metadata['timestamp'];
-                    }
+    // Sessões de screenshots
+    $userData['allSessions'] = getUserSessions($baseDir, $userId);
+    foreach ($userData['allSessions'] as $session) {
+        $userData['totalScreenshots'] += $session['screenshotCount'];
+        
+        if ($session['metadata']) {
+            $timestamp = $session['metadata']['timestamp'] ?? null;
+            if ($timestamp) {
+                if (!$userData['firstSeen'] || $timestamp < $userData['firstSeen']) {
+                    $userData['firstSeen'] = $timestamp;
                 }
-                
-                $userData['allSessions'][] = $sessionData;
-                $userData['totalScreenshots'] += count($screenshots);
+                if (!$userData['lastSeen'] || $timestamp > $userData['lastSeen']) {
+                    $userData['lastSeen'] = $timestamp;
+                }
             }
         }
     }
     
-    $userEventsDir = $baseDir . '/events/' . $userId;
-    if (is_dir($userEventsDir)) {
-        foreach (glob($userEventsDir . '/*/*/*.jsonl') as $eventFile) {
-            $lines = file($eventFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $userData['totalEvents'] += count($lines);
+    // Vídeos
+    $userData['allVideos'] = getUserVideos($baseDir, $userId);
+    $userData['totalVideos'] = count($userData['allVideos']);
+    
+    // Eventos e linha do tempo
+    $userData['allEvents'] = getUserEvents($baseDir, $userId);
+    $userData['totalEvents'] = count($userData['allEvents']);
+    $userData['timeline'] = getUserTimeline($baseDir, $userId);
+    
+    // Atualizar timestamps baseado nos eventos
+    foreach ($userData['allEvents'] as $event) {
+        $timestamp = $event['timestamp'] ?? null;
+        if ($timestamp) {
+            if (!$userData['firstSeen'] || $timestamp < $userData['firstSeen']) {
+                $userData['firstSeen'] = $timestamp;
+            }
+            if (!$userData['lastSeen'] || $timestamp > $userData['lastSeen']) {
+                $userData['lastSeen'] = $timestamp;
+            }
         }
     }
     
@@ -746,44 +909,170 @@ $screenSizeOptions = [
                                 <?php endif; ?>
                             </div>
 
-                            <!-- Sessões de Gravação -->
+                            <!-- Abas de Conteúdo -->
                             <div class="detail-section">
-                                <h3><i class="fas fa-video"></i> Sessões de Gravação (<?= count($userSessions) ?>)</h3>
-                                <?php if (!empty($userSessions)): ?>
-                                <div class="sessions-grid">
-                                    <?php foreach ($userSessions as $session): ?>
-                                    <div class="session-card">
-                                        <div class="session-thumbnail">
-                                            <?php if ($session['firstScreenshot']): ?>
-                                            <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
-                                                 alt="Session thumbnail" loading="lazy">
-                                            <?php else: ?>
-                                            <div class="no-thumbnail">
-                                                <i class="fas fa-image"></i>
-                                            </div>
-                                            <?php endif; ?>
-                                            <div class="session-overlay">
-                                                <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
-                                                    <i class="fas fa-play"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="session-info">
-                                            <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
-                                            <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
-                                            <?php if (!empty($session['metadata']['timestamp'])): ?>
-                                            <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
-                                            <?php endif; ?>
-                                        </div>
+                                <div class="tabs-container">
+                                    <div class="tabs-header">
+                                        <button class="tab-btn active" onclick="showTab('timeline')">
+                                            <i class="fas fa-history"></i> Linha do Tempo (<?= $userData['totalEvents'] ?>)
+                                        </button>
+                                        <button class="tab-btn" onclick="showTab('videos')">
+                                            <i class="fas fa-film"></i> Vídeos (<?= $userData['totalVideos'] ?>)
+                                        </button>
+                                        <button class="tab-btn" onclick="showTab('sessions')">
+                                            <i class="fas fa-camera"></i> Screenshots (<?= count($userData['allSessions']) ?>)
+                                        </button>
                                     </div>
-                                    <?php endforeach; ?>
+                                    
+                                    <!-- Aba Linha do Tempo -->
+                                    <div id="timeline-tab" class="tab-content active">
+                                        <h3><i class="fas fa-history"></i> Linha do Tempo de Eventos</h3>
+                                        <?php if (!empty($userData['timeline'])): ?>
+                                        <div class="timeline-container">
+                                            <?php foreach ($userData['timeline'] as $date => $dayEvents): ?>
+                                            <div class="timeline-day">
+                                                <div class="timeline-date">
+                                                    <i class="fas fa-calendar-day"></i>
+                                                    <?= date('d/m/Y', strtotime($date)) ?>
+                                                    <span class="events-count"><?= count($dayEvents) ?> eventos</span>
+                                                </div>
+                                                
+                                                <div class="timeline-horizontal">
+                                                    <div class="timeline-line"></div>
+                                                    <?php foreach ($dayEvents as $index => $event): ?>
+                                                    <div class="timeline-event" style="left: <?= ($index / count($dayEvents)) * 100 ?>%">
+                                                        <div class="event-marker">
+                                                            <i class="fas fa-circle"></i>
+                                                        </div>
+                                                        <div class="event-popup">
+                                                            <div class="event-time">
+                                                                <i class="fas fa-clock"></i>
+                                                                <?= $event['time'] ?>
+                                                            </div>
+                                                            <div class="event-name">
+                                                                <i class="fas fa-tag"></i>
+                                                                <?= htmlspecialchars($event['event']) ?>
+                                                            </div>
+                                                            <?php if (!empty($event['value'])): ?>
+                                                            <div class="event-value">
+                                                                <i class="fas fa-info-circle"></i>
+                                                                <?= htmlspecialchars($event['value']) ?>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($event['geo']['flag'])): ?>
+                                                            <div class="event-location">
+                                                                <i class="fas fa-map-marker-alt"></i>
+                                                                <?= $event['geo']['flag'] ?> <?= htmlspecialchars($event['geo']['city'] ?? 'Unknown') ?>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <?php else: ?>
+                                        <div class="empty-timeline">
+                                            <i class="fas fa-history"></i>
+                                            <h4>Nenhum evento registrado</h4>
+                                            <p>Os eventos do usuário aparecerão aqui quando forem capturados pelo app.</p>
+                                        </div>
+                                        <?php endif; ?>
+                                    </div>
+                                    
+                                    <!-- Aba Vídeos -->
+                                    <div id="videos-tab" class="tab-content">
+                                        <h3><i class="fas fa-film"></i> Vídeos Gravados</h3>
+                                        <?php if (!empty($userData['allVideos'])): ?>
+                                        <div class="videos-grid">
+                                            <?php foreach ($userData['allVideos'] as $video): ?>
+                                            <div class="video-card">
+                                                <div class="video-thumbnail">
+                                                    <video preload="none" poster="">
+                                                        <source src="<?= htmlspecialchars($video['path']) ?>" type="video/mp4">
+                                                    </video>
+                                                    <div class="video-overlay">
+                                                        <button class="play-video-btn" onclick="playVideo('<?= htmlspecialchars($video['path']) ?>')">
+                                                            <i class="fas fa-play"></i>
+                                                        </button>
+                                                    </div>
+                                                    <div class="video-duration">
+                                                        <i class="fas fa-clock"></i>
+                                                        <?php 
+                                                        if (isset($video['metadata']['imageCount'])) {
+                                                            $framerate = $video['metadata']['userData']['framerate'] ?? 10;
+                                                            $duration = round($video['metadata']['imageCount'] / $framerate);
+                                                            echo sprintf('%02d:%02d', floor($duration / 60), $duration % 60);
+                                                        } else {
+                                                            echo '00:00';
+                                                        }
+                                                        ?>
+                                                    </div>
+                                                </div>
+                                                <div class="video-info">
+                                                    <h4><?= date('d/m/Y H:i', $video['timestamp']) ?></h4>
+                                                    <p><i class="fas fa-hdd"></i> <?= number_format($video['size'] / 1024 / 1024, 1) ?> MB</p>
+                                                    <?php if (isset($video['metadata']['imageCount'])): ?>
+                                                    <p><i class="fas fa-images"></i> <?= $video['metadata']['imageCount'] ?> frames</p>
+                                                    <?php endif; ?>
+                                                    <?php if (isset($video['metadata']['compressionRatio'])): ?>
+                                                    <p><i class="fas fa-compress"></i> <?= $video['metadata']['compressionRatio'] ?>% compressão</p>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <?php else: ?>
+                                        <div class="empty-videos">
+                                            <i class="fas fa-film"></i>
+                                            <h4>Nenhum vídeo encontrado</h4>
+                                            <p>Os vídeos gerados a partir dos screenshots aparecerão aqui.</p>
+                                        </div>
+                                        <?php endif; ?>
+                                    </div>
+                                    
+                                    <!-- Aba Sessões (Screenshots) -->
+                                    <div id="sessions-tab" class="tab-content">
+                                        <h3><i class="fas fa-camera"></i> Sessões de Screenshots</h3>
+                                        <?php if (!empty($userSessions)): ?>
+                                        <div class="sessions-grid">
+                                            <?php foreach ($userSessions as $session): ?>
+                                            <div class="session-card">
+                                                <div class="session-thumbnail">
+                                                    <?php if ($session['firstScreenshot']): ?>
+                                                    <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
+                                                         alt="Session thumbnail" loading="lazy">
+                                                    <?php else: ?>
+                                                    <div class="no-thumbnail">
+                                                        <i class="fas fa-image"></i>
+                                                    </div>
+                                                    <?php endif; ?>
+                                                    <div class="session-overlay">
+                                                        <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
+                                                            <i class="fas fa-play"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="session-info">
+                                                    <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
+                                                    <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
+                                                    <?php if (!empty($session['metadata']['timestamp'])): ?>
+                                                    <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <?php else: ?>
+                                        <div class="empty-sessions">
+                                            <i class="fas fa-camera"></i>
+                                            <h4>Nenhuma sessão encontrada</h4>
+                                            <p>As sessões de screenshot aparecerão aqui quando forem capturadas.</p>
+                                        </div>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
-                                <?php else: ?>
-                                <div class="empty-sessions">
-                                    <i class="fas fa-video"></i>
-                                    <p>Nenhuma sessão encontrada para este usuário</p>
-                                </div>
-                                <?php endif; ?>
                             </div>
 
                             <?php else: ?>
@@ -934,6 +1223,148 @@ $screenSizeOptions = [
 
     <script src="assets/script.js?v=<?= time() ?>"></script>
     <script>
+        // Funções para controlar abas
+        function showTab(tabName) {
+            // Ocultar todas as abas
+            const tabs = document.querySelectorAll('.tab-content');
+            tabs.forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remover classe active de todos os botões
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Mostrar aba selecionada
+            const selectedTab = document.getElementById(tabName + '-tab');
+            if (selectedTab) {
+                selectedTab.classList.add('active');
+            }
+            
+            // Ativar botão correspondente
+            const selectedButton = document.querySelector(`[onclick="showTab('${tabName}')"]`);
+            if (selectedButton) {
+                selectedButton.classList.add('active');
+            }
+        }
+        
+        // Função para reproduzir vídeo
+        function playVideo(videoPath) {
+            // Criar modal de vídeo
+            const modal = document.createElement('div');
+            modal.className = 'video-modal';
+            modal.innerHTML = `
+                <div class="video-modal-content">
+                    <div class="video-modal-header">
+                        <h3><i class="fas fa-film"></i> Reproduzindo Vídeo</h3>
+                        <button class="video-modal-close" onclick="closeVideoModal()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="video-modal-body">
+                        <video id="mainVideo" controls autoplay style="width: 100%; max-height: 70vh;">
+                            <source src="${videoPath}" type="video/mp4">
+                            Seu navegador não suporta reprodução de vídeo.
+                        </video>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            modal.style.display = 'flex';
+            
+            // Configurar evento de teclado para fechar
+            document.addEventListener('keydown', function escapeHandler(e) {
+                if (e.key === 'Escape') {
+                    closeVideoModal();
+                    document.removeEventListener('keydown', escapeHandler);
+                }
+            });
+            
+            // Configurar clique fora para fechar
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    closeVideoModal();
+                }
+            });
+        }
+        
+        // Função para fechar modal de vídeo
+        function closeVideoModal() {
+            const modal = document.querySelector('.video-modal');
+            if (modal) {
+                const video = modal.querySelector('video');
+                if (video) {
+                    video.pause();
+                }
+                modal.remove();
+            }
+        }
+        
+        // Função para deletar dados do usuário
+        function deleteUserData(userId) {
+            if (confirm('Tem certeza que deseja deletar TODOS os dados deste usuário?\n\nIsso incluirá:\n- Eventos\n- Screenshots\n- Vídeos\n- Informações pessoais\n\nEsta ação NÃO pode ser desfeita!')) {
+                fetch('/delete-user?userId=' + encodeURIComponent(userId), {
+                    method: 'GET'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Dados do usuário deletados com sucesso!');
+                        // Voltar para a lista de usuários
+                        window.location.href = '?app=' + encodeURIComponent('<?= $selectedApp ?>');
+                    } else {
+                        alert('Erro ao deletar dados do usuário: ' + (data.error || 'Erro desconhecido'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Erro:', error);
+                    alert('Erro ao deletar dados do usuário');
+                });
+            }
+        }
+        
+        // Inicializar tooltips para eventos da timeline
+        document.addEventListener('DOMContentLoaded', function() {
+            // Adicionar hover para eventos da timeline
+            const timelineEvents = document.querySelectorAll('.timeline-event');
+            timelineEvents.forEach(event => {
+                const popup = event.querySelector('.event-popup');
+                
+                event.addEventListener('mouseenter', function() {
+                    popup.style.display = 'block';
+                    
+                    // Posicionar popup para não sair da tela
+                    const rect = popup.getBoundingClientRect();
+                    const viewportWidth = window.innerWidth;
+                    
+                    if (rect.right > viewportWidth) {
+                        popup.style.left = 'auto';
+                        popup.style.right = '0';
+                    }
+                });
+                
+                event.addEventListener('mouseleave', function() {
+                    popup.style.display = 'none';
+                    popup.style.left = '50%';
+                    popup.style.right = 'auto';
+                });
+            });
+            
+            // Auto-refresh da página a cada 30 segundos se não houver modal aberto
+            setInterval(function() {
+                if (!document.querySelector('.modal[style*="flex"]') && !document.querySelector('.video-modal')) {
+                    // Só recarregar se estiver na mesma página (evitar recarregar durante navegação)
+                    if (document.visibilityState === 'visible') {
+                        const currentParams = new URLSearchParams(window.location.search);
+                        window.location.search = currentParams.toString();
+                    }
+                }
+            }, 30000);
+        });
+        
         // Funções específicas do dashboard
         
         function showCreateAppModal() {
