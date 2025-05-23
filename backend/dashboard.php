@@ -1781,18 +1781,75 @@ $screenSizeOptions = [
         function playVideo(videoPath) {
             console.log('🎬 Reproduzindo vídeo:', videoPath);
             
+            // TESTE SIMPLES: Criar um alert primeiro para verificar se a função está sendo chamada
+            // alert('Função playVideo foi chamada para: ' + videoPath);
+            
+            // Remover qualquer modal existente
+            const existingModal = document.querySelector('.video-modal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+            
             // Criar modal de vídeo
             const modal = document.createElement('div');
             modal.className = 'video-modal';
+            
+            // Aplicar estilos inline para garantir exibição com !important
+            modal.style.cssText = `
+                position: fixed !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                background: rgba(0, 0, 0, 0.9) !important;
+                z-index: 999999 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                opacity: 1 !important;
+            `;
+            
             modal.innerHTML = `
-                <div class="video-modal-content">
-                    <div class="video-modal-header">
-                        <h3><i class="fas fa-film"></i> Reproduzindo Sessão Gravada</h3>
-                        <button class="video-modal-close" onclick="closeVideoModal()">
+                <div class="video-modal-content" style="
+                    position: relative;
+                    max-width: 95vw;
+                    max-height: 95vh;
+                    background: white;
+                    border-radius: 12px;
+                    overflow: hidden;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+                ">
+                    <div class="video-modal-header" style="
+                        padding: 1rem 1.5rem;
+                        background: #667eea;
+                        color: white;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                    ">
+                        <h3 style="margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-film"></i> Reproduzindo Sessão Gravada
+                        </h3>
+                        <button class="video-modal-close" onclick="closeVideoModal()" style="
+                            background: none;
+                            border: none;
+                            color: white;
+                            font-size: 1.5rem;
+                            cursor: pointer;
+                            padding: 0.5rem;
+                            border-radius: 6px;
+                            transition: background 0.3s ease;
+                        ">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
-                    <div class="video-modal-body">
+                    <div class="video-modal-body" style="
+                        padding: 0;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        background: #000;
+                    ">
                         <video id="mainVideo" controls autoplay style="width: 100%; max-height: 80vh;">
                             <source src="${videoPath}" type="video/mp4">
                             Seu navegador não suporta reprodução de vídeo.
@@ -1801,9 +1858,27 @@ $screenSizeOptions = [
                 </div>
             `;
             
+            console.log('📝 Modal HTML criado');
+            
             document.body.appendChild(modal);
-            modal.style.display = 'flex';
             document.body.style.overflow = 'hidden';
+            
+            console.log('🎯 Modal adicionado ao DOM');
+            console.log('Modal element:', modal);
+            console.log('Modal style display:', modal.style.display);
+            console.log('Modal computed style:', window.getComputedStyle(modal).display);
+            
+            // Verificar se o modal está visível
+            setTimeout(() => {
+                const rect = modal.getBoundingClientRect();
+                console.log('📏 Modal position and size:', {
+                    top: rect.top,
+                    left: rect.left,
+                    width: rect.width,
+                    height: rect.height,
+                    visible: rect.width > 0 && rect.height > 0
+                });
+            }, 100);
             
             // Configurar evento de teclado para fechar
             const escapeHandler = function(e) {
@@ -1821,7 +1896,7 @@ $screenSizeOptions = [
                 }
             });
             
-            console.log('✅ Modal de vídeo criado e exibido');
+            console.log('✅ Modal de vídeo criado e exibido com estilos inline');
         }
         
         // Função para fechar modal de vídeo
