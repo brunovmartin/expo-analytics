@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste Modal Screenshot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 2rem;
+        }
+        
+        .test-image {
+            width: 200px;
+            height: 150px;
+            background: #667eea;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        .screenshot-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 99999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .screenshot-modal.active {
+            display: flex !important;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Teste Modal Screenshot</h1>
+    
+    <div class="test-image" onclick="testOpenModal()">
+        Clique aqui para testar o modal
+    </div>
+    
+    <div class="test-image" onclick="openScreenshotModal('http://localhost:8080/event-screenshot.php?user=user-1748017377383-oyjblq&date=2025-05-23&file=event_1748020789_custom_interaction.jpg', 'Teste Screenshot')">
+        Clique aqui para testar com screenshot real
+    </div>
+    
+    <button onclick="testConsole()">Testar Console</button>
+    
+    <script>
+        function testConsole() {
+            console.log('🧪 Teste console funcionando');
+            alert('Console teste OK!');
+        }
+        
+        function testOpenModal() {
+            console.log('🎯 testOpenModal chamada');
+            
+            const modal = document.createElement('div');
+            modal.className = 'screenshot-modal active';
+            modal.innerHTML = `
+                <div style="background: white; padding: 2rem; border-radius: 8px; text-align: center;">
+                    <h2>🎉 Modal de Teste Funcionando!</h2>
+                    <p>Se você vê esta mensagem, o modal funciona.</p>
+                    <button onclick="this.closest('.screenshot-modal').remove()">Fechar</button>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            console.log('✅ Modal de teste criado');
+        }
+        
+        function openScreenshotModal(imageUrl, eventName) {
+            try {
+                console.log('🎯 INICIO - openScreenshotModal chamada');
+                console.log('📸 URL da imagem:', imageUrl);
+                console.log('🏷️ Nome do evento:', eventName);
+                
+                // Remover modal existente
+                const existingModal = document.querySelector('.screenshot-modal');
+                if (existingModal) {
+                    existingModal.remove();
+                }
+                
+                // Criar novo modal
+                const modal = document.createElement('div');
+                modal.className = 'screenshot-modal';
+                modal.style.position = 'fixed';
+                modal.style.top = '0';
+                modal.style.left = '0';
+                modal.style.width = '100vw';
+                modal.style.height = '100vh';
+                modal.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
+                modal.style.zIndex = '99999';
+                modal.style.display = 'flex';
+                modal.style.alignItems = 'center';
+                modal.style.justifyContent = 'center';
+                modal.style.opacity = '0';
+                modal.style.transition = 'opacity 0.3s ease';
+                
+                modal.innerHTML = `
+                    <div style="position: relative; max-width: 90vw; max-height: 90vh; background: white; border-radius: 12px; overflow: hidden;">
+                        <div style="padding: 1rem 1.5rem; background: #667eea; color: white; display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0; font-size: 1.1rem;">
+                                Screenshot: ${eventName}
+                            </h3>
+                            <button onclick="closeScreenshotModal()" style="background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer; padding: 0.5rem;">
+                                ✕
+                            </button>
+                        </div>
+                        <div style="padding: 0; display: flex; align-items: center; justify-content: center; min-height: 300px;">
+                            <img src="${imageUrl}" alt="Event screenshot" onclick="closeScreenshotModal()" style="max-width: 100%; max-height: 80vh; width: auto; height: auto; cursor: pointer;">
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                console.log('✅ Modal adicionado ao DOM');
+                
+                // Mostrar modal
+                setTimeout(() => {
+                    modal.style.opacity = '1';
+                    console.log('🌟 Modal exibido');
+                }, 50);
+                
+                // Fechar clicando fora
+                modal.addEventListener('click', function(e) {
+                    if (e.target === modal) {
+                        closeScreenshotModal();
+                    }
+                });
+                
+            } catch (error) {
+                console.error('💥 Erro:', error);
+                alert('Erro: ' + error.message);
+            }
+        }
+        
+        function closeScreenshotModal() {
+            console.log('🚪 Fechando modal');
+            const modal = document.querySelector('.screenshot-modal');
+            if (modal) {
+                modal.style.opacity = '0';
+                setTimeout(() => {
+                    modal.remove();
+                    console.log('✅ Modal removido');
+                }, 300);
+            }
+        }
+        
+        console.log('🚀 Página de teste carregada');
+    </script>
+</body>
+</html> 

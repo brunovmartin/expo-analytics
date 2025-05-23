@@ -10,6 +10,7 @@ export default function App() {
     const [appConfig, setAppConfig] = useState<any>(null);
     const [configLoading, setConfigLoading] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string>('');
+    const [isInitialized, setIsInitialized] = useState(false);
 
     useEffect(() => {
         // Inicializar userId persistente e buscar configurações
@@ -19,23 +20,39 @@ export default function App() {
 
     const initializeUser = async () => {
         try {
-            let userId = await AsyncStorage.getItem('expo_analytics_user_id');
+            let storedUserId = await AsyncStorage.getItem('analytics_user_id');
             
-            if (!userId) {
-                // Gerar userId único apenas na primeira vez
-                userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-                await AsyncStorage.setItem('expo_analytics_user_id', userId);
-                console.log('✅ Novo usuário criado:', userId);
+            if (!storedUserId) {
+                // Gerar ID único: user-timestamp-random
+                const timestamp = Date.now();
+                const random = Math.random().toString(36).substring(2, 8);
+                storedUserId = `user-${timestamp}-${random}`;
+                
+                await AsyncStorage.setItem('analytics_user_id', storedUserId);
+                console.log('💾 Novo usuário criado:', storedUserId);
             } else {
-                console.log('✅ Usuário existente recuperado:', userId);
+                console.log('👤 Usuário existente:', storedUserId);
             }
             
-            setCurrentUserId(userId);
+            setCurrentUserId(storedUserId);
+            setIsInitialized(true);
+            
+            // INICIALIZAR SISTEMA E CADASTRAR USUÁRIO AUTOMATICAMENTE
+            console.log('🚀 Inicializando sistema Expo Analytics...');
+            await ExpoAnalytics.init({
+                userId: storedUserId,
+                apiHost: apiHost,
+                userData: {
+                    initializeMethod: 'automatic',
+                    initializedAt: new Date().toISOString()
+                }
+            });
+            console.log('✅ Sistema inicializado e usuário cadastrado!');
+            
+            return storedUserId;
         } catch (error) {
             console.error('❌ Erro ao inicializar usuário:', error);
-            // Fallback para userId temporário se AsyncStorage falhar
-            const fallbackUserId = 'temp-user-' + Date.now();
-            setCurrentUserId(fallbackUserId);
+            return 'user-fallback-' + Date.now();
         }
     };
 
@@ -61,14 +78,8 @@ export default function App() {
 
         try {
             await ExpoAnalytics.start({
-                apiHost: apiHost,
-                userId: currentUserId, // Usar o userId persistente
                 userData: {
-                    appVersion: '1.0.0',
-                    platform: 'iOS',
-                    device: 'iPhone',
-                    environment: 'development',
-                    sessionStartTime: new Date().toISOString()
+                    customData: 'example-value'
                 }
             });
             
@@ -114,6 +125,45 @@ export default function App() {
         } catch (error) {
             console.error('❌ Erro ao atualizar usuário:', error);
         }
+    };
+
+    const trackButtonPress = () => {
+        if (!isInitialized) {
+            Alert.alert('Aviso', 'Analytics ainda não foi inicializado');
+            return;
+        }
+
+        console.log('📊 Rastreando evento: button_press');
+        ExpoAnalytics.trackEvent('button_press', 'main_action_button');
+        
+        Alert.alert('Evento Rastreado', 'Evento "button_press" enviado com screenshot!');
+    };
+
+    const trackCustomEvent = () => {
+        if (!isInitialized) {
+            Alert.alert('Aviso', 'Analytics ainda não foi inicializado');
+            return;
+        }
+
+        console.log('📊 Rastreando evento: custom_interaction');
+        ExpoAnalytics.trackEvent('custom_interaction', 'user_engagement');
+        
+        Alert.alert('Evento Personalizado', 'Evento "custom_interaction" enviado com screenshot!');
+    };
+
+    const updateUserInfo = () => {
+        if (!isInitialized) {
+            Alert.alert('Aviso', 'Analytics ainda não foi inicializado');
+            return;
+        }
+
+        console.log('👤 Atualizando informações do usuário');
+        ExpoAnalytics.updateUserInfo({
+            lastAction: new Date().toISOString(),
+            interactionCount: Date.now()
+        });
+        
+        Alert.alert('Info Atualizada', 'Informações do usuário atualizadas!');
     };
 
     return (
@@ -236,6 +286,47 @@ export default function App() {
                         {'\n'}4. Eventos e dados do usuário são sempre rastreados independente da gravação
                     </Text>
                 </View>
+
+                <View style={styles.infoContainer}>
+                    <Text style={styles.infoText}>
+                        Status: {isInitialized ? '✅ Inicializado' : '⏳ Carregando...'}
+                    </Text>
+                    {currentUserId && (
+                        <Text style={styles.userText}>
+                            Usuário: {currentUserId}
+                        </Text>
+                    )}
+                </View>
+
+                <View style={styles.buttonsContainer}>
+                    <TouchableOpacity 
+                        style={[styles.button, styles.primaryButton]} 
+                        onPress={trackButtonPress}
+                        disabled={!isInitialized}
+                    >
+                        <Text style={styles.buttonText}>📊 Track Button Press</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={[styles.button, styles.secondaryButton]} 
+                        onPress={trackCustomEvent}
+                        disabled={!isInitialized}
+                    >
+                        <Text style={styles.buttonText}>🎯 Track Custom Event</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={[styles.button, styles.tertiaryButton]} 
+                        onPress={updateUserInfo}
+                        disabled={!isInitialized}
+                    >
+                        <Text style={styles.buttonText}>👤 Update User Info</Text>
+                    </TouchableOpacity>
+                </View>
+
+                <Text style={styles.footer}>
+                    Todos os eventos são enviados com screenshot automático! 📸
+                </Text>
             </ScrollView>
         </View>
     );
@@ -421,5 +512,30 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#e5e7eb',
+    },
+    infoContainer: {
+        marginBottom: 20,
+    },
+    userText: {
+        fontSize: 14,
+        color: '#6b7280',
+        marginTop: 8,
+    },
+    buttonsContainer: {
+        marginBottom: 20,
+    },
+    primaryButton: {
+        backgroundColor: '#10b981',
+    },
+    secondaryButton: {
+        backgroundColor: '#3b82f6',
+    },
+    tertiaryButton: {
+        backgroundColor: '#8b5cf6',
+    },
+    footer: {
+        textAlign: 'center',
+        color: '#6b7280',
+        fontStyle: 'italic',
     },
 });

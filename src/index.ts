@@ -6,8 +6,16 @@ export { StartOptions, AppConfig };
 /**
  * Busca configurações do app no servidor
  */
-export async function fetchAppConfig(apiHost: string, bundleId?: string): Promise<AppConfig> {
-  return ExpoAnalyticsModule.fetchAppConfig(apiHost, bundleId);
+export async function fetchAppConfig(apiHost?: string, bundleId?: string): Promise<AppConfig> {
+  return ExpoAnalyticsModule.fetchAppConfig(apiHost || undefined, bundleId || undefined);
+}
+
+/**
+ * Inicializa o sistema Expo Analytics e cadastra o usuário automaticamente
+ * Esta função configura todas as informações necessárias e registra o usuário internamente
+ */
+export async function init(options?: StartOptions): Promise<void> {
+  return ExpoAnalyticsModule.init(options);
 }
 
 /**
@@ -41,6 +49,7 @@ export async function updateUserInfo(userData?: Record<string, any>): Promise<vo
 
 export default {
   fetchAppConfig,
+  init,
   start,
   stop,
   trackEvent,

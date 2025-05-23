@@ -426,3 +426,30 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 console.log('Analytics Dashboard loaded successfully! 🚀'); 
+
+// Função para posicionar vídeo no meio da duração como prévia
+function seekToMidpoint(video) {
+    video.addEventListener('loadedmetadata', function() {
+        if (this.duration && this.duration > 0 && !isNaN(this.duration)) {
+            // Ir para 50% do tempo do vídeo para mostrar prévia
+            this.currentTime = this.duration * 0.5;
+        }
+    });
+}
+
+// Inicializar prévias de vídeo quando a página carregar
+document.addEventListener('DOMContentLoaded', function() {
+    // Para vídeos compactos
+    const compactVideos = document.querySelectorAll('.video-thumbnail-compact video');
+    compactVideos.forEach(video => {
+        seekToMidpoint(video);
+    });
+    
+    // Para vídeos normais
+    const normalVideos = document.querySelectorAll('.video-thumbnail video');
+    normalVideos.forEach(video => {
+        seekToMidpoint(video);
+    });
+    
+    console.log(`Initialized video previews for ${compactVideos.length + normalVideos.length} videos`);
+}); 

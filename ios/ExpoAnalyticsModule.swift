@@ -22,6 +22,15 @@ extension Data {
     }
 }
 
+// Extension para suporte ao formato ISO string
+extension Date {
+    func toISOString() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: self)
+    }
+}
+
 // Estrutura para criar ZIP manual (formato simplificado mas funcional)
 struct ZipLocalFileHeader {
     static let signature: UInt32 = 0x04034b50
@@ -121,7 +130,7 @@ public class ExpoAnalyticsModule: Module {
   private var recordScreenEnabled: Bool = false
 
   private var userId: String = "anonymous"
-  private var apiHost: String = "https://suaapi.com"
+  private var apiHost: String = "http://localhost:8080"
   private var userData: [String: Any] = [:]
   
   // Sistema de throttling para performance
@@ -160,23 +169,63 @@ public class ExpoAnalyticsModule: Module {
       }
     }
 
-    AsyncFunction("fetchAppConfig") { (apiHost: String, bundleId: String?) -> [String: Any] in
-      return await self.fetchAppConfigFromServer(apiHost: apiHost, bundleId: bundleId)
+    AsyncFunction("fetchAppConfig") { (apiHost: String?, bundleId: String?) -> [String: Any] in
+      let hostToUse = apiHost ?? self.apiHost
+      let bundleIdToUse = bundleId ?? Bundle.main.bundleIdentifier ?? "unknown.app"
+      return await self.fetchAppConfigFromServer(bundleId: bundleIdToUse, apiHost: hostToUse)
     }
 
-    AsyncFunction("start") { (options: [String: Any]?) in
+    AsyncFunction("init") { (options: [String: Any]?) in
+      NSLog("🚀 [ExpoAnalytics] Inicializando sistema...")
+      
+      // PRIMEIRA COISA: Processar dados do usuário e cadastrar AUTOMATICAMENTE
       if let config = options {
         if let id = config["userId"] as? String { self.userId = id }
         if let host = config["apiHost"] as? String { self.apiHost = host }
         if let data = config["userData"] as? [String: Any] { self.userData = data }
       }
 
-      // Buscar bundle ID do app
+      // Adicionar informações automáticas do device e app IMEDIATAMENTE
+      self.userData["appVersion"] = self.getFormattedAppVersion()
+      self.userData["bundleId"] = self.getBundleIdentifier()
+      self.userData["platform"] = self.getIOSVersion()
+      self.userData["device"] = self.getFormattedDeviceInfo()
+      self.userData["environment"] = "production"
+      self.userData["initTime"] = Date().toISOString()
+
+      // CADASTRAR USUÁRIO AUTOMATICAMENTE (interno/oculto)
+      NSLog("👤 [ExpoAnalytics] Cadastrando usuário automaticamente...")
+      self.sendUserInfoPayload()
+
+      NSLog("✅ [ExpoAnalytics] Sistema inicializado e usuário cadastrado!")
+    }
+
+    AsyncFunction("start") { (options: [String: Any]?) in
+      // PRIMEIRA COISA: Processar dados do usuário e cadastrar IMEDIATAMENTE
+      if let config = options {
+        if let id = config["userId"] as? String { self.userId = id }
+        if let host = config["apiHost"] as? String { self.apiHost = host }
+        if let data = config["userData"] as? [String: Any] { self.userData = data }
+      }
+
+      // Adicionar informações automáticas do device e app IMEDIATAMENTE
+      self.userData["appVersion"] = self.getFormattedAppVersion()
+      self.userData["bundleId"] = self.getBundleIdentifier()
+      self.userData["platform"] = self.getIOSVersion()
+      self.userData["device"] = self.getFormattedDeviceInfo()
+      self.userData["environment"] = "production" // ou detectar se é debug
+      self.userData["sessionStartTime"] = Date().toISOString()
+
+      // CADASTRAR USUÁRIO IMEDIATAMENTE - PRIMEIRA COISA!
+      NSLog("🚀 [ExpoAnalytics] CADASTRANDO USUÁRIO IMEDIATAMENTE...")
+      self.sendUserInfoPayload()
+
+      // Agora buscar configurações do servidor
       let bundleId = Bundle.main.bundleIdentifier ?? "unknown.app"
       NSLog("📱 [ExpoAnalytics] Bundle ID: \(bundleId)")
 
       // Buscar configurações do servidor
-      let serverConfig = await self.fetchAppConfigFromServer(apiHost: self.apiHost, bundleId: bundleId)
+      let serverConfig = await self.fetchAppConfigFromServer(bundleId: bundleId, apiHost: self.apiHost)
       
       // Aplicar configurações
       self.recordScreenEnabled = serverConfig["recordScreen"] as? Bool ?? false
@@ -203,13 +252,15 @@ public class ExpoAnalyticsModule: Module {
       NSLog("   Record Screen: \(self.recordScreenEnabled)")
       NSLog("   Framerate: \(self.framerate) fps (intervalo: \(String(format: "%.3f", self.targetFrameInterval))s)")
       NSLog("   Screen Size: \(Int(self.screenSize.width))x\(Int(self.screenSize.height))")
-
-      // Enviar informações do usuário
-      self.sendUserInfoPayload()
+      NSLog("   Device: \(self.userData["device"] ?? "unknown")")
+      NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
+      NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
+      NSLog("   Bundle ID: \(self.userData["bundleId"] ?? "unknown")")
 
       // Iniciar captura apenas se record screen estiver ativo
       if self.recordScreenEnabled {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+          guard let self = self else { return }
           self.startNewSession()
           self.startOptimizedCapture()
         }
@@ -220,7 +271,8 @@ public class ExpoAnalyticsModule: Module {
 
     AsyncFunction("stop") { () in
       NSLog("⏹️ [ExpoAnalytics] Stop chamado - finalizando sessão atual")
-      DispatchQueue.main.async {
+      DispatchQueue.main.async { [weak self] in
+        guard let self = self else { return }
         if self.recordScreenEnabled && self.frameCount > 0 {
           self.finishCurrentSession()
         }
@@ -230,15 +282,55 @@ public class ExpoAnalyticsModule: Module {
 
     AsyncFunction("trackEvent") { (event: String, value: String) in
       let timestamp = Date().timeIntervalSince1970
+      
+      // Capturar screenshot para o evento
+      let screenshotData = self.captureScreenshotForEvent()
+      let hasScreenshot = screenshotData != nil
+      
+      NSLog("📝 [ExpoAnalytics] Tracking event '\(event)' with screenshot: \(hasScreenshot)")
+      
       let payload: [String: Any] = [
         "userId": self.userId,
         "event": event,
         "value": value,
         "timestamp": timestamp,
-        "userData": self.userData
+        "userData": self.userData,
+        "hasScreenshot": hasScreenshot,
+        "screenshotSize": screenshotData?.count ?? 0
       ]
 
       guard let url = URL(string: self.apiHost + "/track") else { return }
+      
+      // Se temos screenshot, enviar como multipart
+      if let screenshotData = screenshotData {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        var body = Data()
+        
+        // Adicionar dados do evento
+        let eventJson = try! JSONSerialization.data(withJSONObject: payload)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"eventData\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
+        body.append(eventJson)
+        body.append("\r\n".data(using: .utf8)!)
+        
+        // Adicionar screenshot
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"screenshot\"; filename=\"event_\(Int(timestamp))_\(event.replacingOccurrences(of: " ", with: "_")).jpg\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(screenshotData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        
+        request.httpBody = body
+        URLSession.shared.dataTask(with: request).resume()
+        
+      } else {
+        // Sem screenshot, enviar apenas JSON
       var request = URLRequest(url: url)
       request.httpMethod = "POST"
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -249,6 +341,7 @@ public class ExpoAnalyticsModule: Module {
         URLSession.shared.dataTask(with: request).resume()
       } catch {
         NSLog("❌ [ExpoAnalytics] Erro ao enviar evento: \(error)")
+        }
       }
     }
 
@@ -259,9 +352,9 @@ public class ExpoAnalyticsModule: Module {
         }
       }
 
-      self.sendUserInfoPayload()
+        self.sendUserInfoPayload()
+      }
     }
-  }
 
   private func startNewSession() {
     // Limpar sessão anterior se houver
@@ -290,17 +383,11 @@ public class ExpoAnalyticsModule: Module {
     self.sendCurrentSession()
   }
 
-  private func fetchAppConfigFromServer(apiHost: String, bundleId: String?) async -> [String: Any] {
-    let bundle = bundleId ?? Bundle.main.bundleIdentifier ?? "unknown.app"
-    
-    guard let url = URL(string: "\(apiHost)/app-config?bundleId=\(bundle)") else {
-      NSLog("❌ [ExpoAnalytics] URL inválida para buscar config: \(apiHost)")
-      return defaultConfig()
-    }
-
-    NSLog("🔍 [ExpoAnalytics] Buscando configurações para: \(bundle)")
+  private func fetchAppConfigFromServer(bundleId: String, apiHost: String) async -> [String: Any] {
+    NSLog("🔍 [ExpoAnalytics] Buscando configurações para: \(bundleId)")
 
     do {
+      let url = URL(string: "\(apiHost)/app-config?bundleId=\(bundleId)")!
       let (data, response) = try await URLSession.shared.data(from: url)
       
       if let httpResponse = response as? HTTPURLResponse {
@@ -350,7 +437,7 @@ public class ExpoAnalyticsModule: Module {
     self.displayLink = nil
     NSLog("⏹️ [ExpoAnalytics] Captura de tela parada")
   }
-  
+
   @objc
   private func optimizedCaptureFrame() {
     guard self.isCapturing else { return }
@@ -375,13 +462,13 @@ public class ExpoAnalyticsModule: Module {
           let window = windowScene.windows.first else { return }
 
     DispatchQueue.main.sync {
-      let originalBounds = window.bounds
-      
+    let originalBounds = window.bounds
+    
       // Calcular escala para reduzir a resolução desde o início
       let targetSize = self.screenSize
       let scaleX = targetSize.width / originalBounds.width
       let scaleY = targetSize.height / originalBounds.height
-      
+    
       // Criar contexto com o tamanho alvo já reduzido
       UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0) // Scale fixo 1.0
       
@@ -392,16 +479,16 @@ public class ExpoAnalyticsModule: Module {
       
       // Aplicar transformação para redimensionar durante a captura
       context.scaleBy(x: scaleX, y: scaleY)
-      window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+    window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
       
       let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
-      UIGraphicsEndImageContext()
+    UIGraphicsEndImageContext()
 
       guard let image = capturedImage else { 
-        NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
-        return 
-      }
-      
+      NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
+      return 
+    }
+    
       // Processar imagem em background
       captureQueue.async { [weak self] in
         self?.processAndSaveImage(image)
@@ -456,8 +543,8 @@ public class ExpoAnalyticsModule: Module {
       "format": "zip"
     ]
 
-    guard let url = URL(string: apiHost + "/upload-zip") else { 
-      NSLog("❌ [ExpoAnalytics] URL inválida: \(apiHost)")
+    guard let url = URL(string: self.apiHost + "/upload-zip") else { 
+      NSLog("❌ [ExpoAnalytics] URL inválida: \(self.apiHost)")
       return 
     }
     
@@ -484,7 +571,7 @@ public class ExpoAnalyticsModule: Module {
     body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
     body.append(metadataJson)
     body.append("\r\n".data(using: .utf8)!)
-    
+      
     // Adicionar arquivo ZIP
     body.append("--\(boundary)\r\n".data(using: .utf8)!)
     body.append("Content-Disposition: form-data; name=\"screenshots\"; filename=\"session_\(self.currentSessionId).zip\"\r\n".data(using: .utf8)!)
@@ -494,33 +581,34 @@ public class ExpoAnalyticsModule: Module {
     body.append("--\(boundary)--\r\n".data(using: .utf8)!)
     
     request.httpBody = body
-    
-    let startTime = Date()
-    URLSession.shared.dataTask(with: request) { data, response, error in
-      let duration = Date().timeIntervalSince(startTime)
       
-      if let error = error {
+      let startTime = Date()
+      URLSession.shared.dataTask(with: request) { data, response, error in
+        let duration = Date().timeIntervalSince(startTime)
+        
+        if let error = error {
         NSLog("❌ [ExpoAnalytics] Erro no upload da sessão: \(error.localizedDescription)")
-      } else if let httpResponse = response as? HTTPURLResponse {
-        let statusCode = httpResponse.statusCode
-        let responseSize = data?.count ?? 0
-        
-        NSLog("✅ [ExpoAnalytics] Upload da sessão concluído em \(String(format: "%.1f", duration))s")
-        NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
-        
-        if statusCode == 200 {
-          NSLog("🎉 [ExpoAnalytics] Sessão \(self.currentSessionId) enviada com sucesso!")
+        } else if let httpResponse = response as? HTTPURLResponse {
+          let statusCode = httpResponse.statusCode
+          let responseSize = data?.count ?? 0
           
-          // Limpar screenshots locais apenas se upload foi bem-sucedido
-          DispatchQueue.main.async {
-            self.clearLocalScreenshots()
-            self.frameCount = 0
-          }
-        } else {
+        NSLog("✅ [ExpoAnalytics] Upload da sessão concluído em \(String(format: "%.1f", duration))s")
+          NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
+          
+          if statusCode == 200 {
+          NSLog("🎉 [ExpoAnalytics] Sessão \(self.currentSessionId) enviada com sucesso!")
+            
+            // Limpar screenshots locais apenas se upload foi bem-sucedido
+          DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+              self.clearLocalScreenshots()
+              self.frameCount = 0
+            }
+          } else {
           NSLog("⚠️ [ExpoAnalytics] Upload da sessão com status não-200, mantendo arquivos locais")
+          }
         }
-      }
-    }.resume()
+      }.resume()
   }
 
   // Alias para manter compatibilidade
@@ -709,13 +797,19 @@ public class ExpoAnalyticsModule: Module {
   }
 
   private func sendUserInfoPayload() {
+    NSLog("👤 [ExpoAnalytics] Cadastrando usuário automaticamente no sistema...")
+    
     let payload: [String: Any] = [
       "userId": self.userId,
       "userData": self.userData,
       "timestamp": Date().timeIntervalSince1970
     ]
 
-    guard let url = URL(string: self.apiHost + "/init") else { return }
+    guard let url = URL(string: self.apiHost + "/init") else { 
+      NSLog("❌ [ExpoAnalytics] URL inválida para cadastro: \(self.apiHost)")
+      return 
+    }
+    
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -723,9 +817,97 @@ public class ExpoAnalyticsModule: Module {
     do {
       let jsonData = try JSONSerialization.data(withJSONObject: payload)
       request.httpBody = jsonData
-      URLSession.shared.dataTask(with: request).resume()
+      
+      NSLog("📤 [ExpoAnalytics] Enviando dados do usuário para cadastro:")
+      NSLog("   User ID: \(self.userId)")
+      NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
+      NSLog("   Device: \(self.userData["device"] ?? "unknown")")
+      NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
+      
+      URLSession.shared.dataTask(with: request) { data, response, error in
+        if let error = error {
+          NSLog("❌ [ExpoAnalytics] Erro no cadastro do usuário: \(error.localizedDescription)")
+        } else if let httpResponse = response as? HTTPURLResponse {
+          let statusCode = httpResponse.statusCode
+          if statusCode == 200 {
+            NSLog("✅ [ExpoAnalytics] Usuário cadastrado com sucesso no sistema!")
+          } else {
+            NSLog("⚠️ [ExpoAnalytics] Cadastro com status não-200: \(statusCode)")
+          }
+        }
+      }.resume()
     } catch {
-      NSLog("❌ [ExpoAnalytics] Erro ao enviar userInfo: \(error)")
+      NSLog("❌ [ExpoAnalytics] Erro ao serializar dados do usuário: \(error)")
     }
+  }
+  
+  // MARK: - Device Information Functions
+  
+  private func getIOSVersion() -> String {
+    let version = UIDevice.current.systemVersion
+    return "iOS \(version)"
+  }
+  
+  private func getDeviceModelIdentifier() -> String {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    let machineMirror = Mirror(reflecting: systemInfo.machine)
+    let identifier = machineMirror.children.reduce("") { identifier, element in
+      guard let value = element.value as? Int8, value != 0 else { return identifier }
+      return identifier + String(UnicodeScalar(UInt8(value)))
+    }
+    return identifier
+  }
+  
+  private func getFormattedAppVersion() -> String {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    return "\(version).(\(build))"
+  }
+  
+  private func getFormattedDeviceInfo() -> String {
+    // Retornar apenas o identificador técnico - o mapeamento será feito no backend
+    return getDeviceModelIdentifier()
+  }
+  
+  private func getBundleIdentifier() -> String {
+    return Bundle.main.bundleIdentifier ?? "unknown.app"
+  }
+  
+  private func captureScreenshotForEvent() -> Data? {
+    guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+          let window = windowScene.windows.first else { 
+      NSLog("❌ [ExpoAnalytics] Não foi possível capturar screenshot para evento")
+      return nil 
+    }
+    
+    var capturedImage: UIImage?
+    
+    DispatchQueue.main.sync {
+      let originalBounds = window.bounds
+      
+      // Usar tamanho menor para eventos (320x640 para economizar dados)
+      let eventScreenSize = CGSize(width: 320, height: 640)
+      let scaleX = eventScreenSize.width / originalBounds.width
+      let scaleY = eventScreenSize.height / originalBounds.height
+      
+      UIGraphicsBeginImageContextWithOptions(eventScreenSize, false, 1.0)
+      
+      guard let context = UIGraphicsGetCurrentContext() else {
+        NSLog("❌ [ExpoAnalytics] Erro ao criar contexto para screenshot do evento")
+        return
+      }
+      
+      context.scaleBy(x: scaleX, y: scaleY)
+      window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      
+      capturedImage = UIGraphicsGetImageFromCurrentImageContext()
+      UIGraphicsEndImageContext()
+    }
+    
+    guard let image = capturedImage else { return nil }
+    
+    // Comprimir com qualidade mais baixa para eventos (50%)
+    return image.jpegData(compressionQuality: 0.5)
   }
 }

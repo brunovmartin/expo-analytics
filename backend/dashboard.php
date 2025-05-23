@@ -3,6 +3,64 @@
 date_default_timezone_set('America/Sao_Paulo');
 $baseDir = __DIR__ . '/analytics-data';
 
+// Função para buscar ícone da App Store com cache
+function getAppStoreIcon($bundleId, $baseDir) {
+    $cacheDir = $baseDir . '/cache';
+    $cacheFile = $cacheDir . '/app-icons.json';
+    
+    // Criar diretório de cache se não existir
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0755, true);
+    }
+    
+    // Carregar cache existente
+    $cache = [];
+    if (file_exists($cacheFile)) {
+        $cache = json_decode(file_get_contents($cacheFile), true) ?: [];
+    }
+    
+    // Verificar se já temos o ícone em cache (válido por 7 dias)
+    $cacheKey = $bundleId;
+    $cacheValidFor = 7 * 24 * 60 * 60; // 7 dias em segundos
+    
+    if (isset($cache[$cacheKey]) && 
+        isset($cache[$cacheKey]['timestamp']) && 
+        isset($cache[$cacheKey]['icon']) &&
+        (time() - $cache[$cacheKey]['timestamp']) < $cacheValidFor) {
+        return $cache[$cacheKey]['icon'];
+    }
+    
+    // Buscar ícone da App Store
+    $appStoreIcon = null;
+    $searchUrl = "https://itunes.apple.com/search?term=" . urlencode($bundleId) . "&entity=software&limit=1&country=US";
+    
+    $context = stream_context_create([
+        'http' => [
+            'timeout' => 3,
+            'user_agent' => 'Mozilla/5.0 (compatible; Analytics Dashboard)'
+        ]
+    ]);
+    
+    $response = @file_get_contents($searchUrl, false, $context);
+    if ($response) {
+        $data = json_decode($response, true);
+        if (isset($data['results'][0]['artworkUrl100'])) {
+            // Usar ícone de 512px para melhor qualidade
+            $appStoreIcon = str_replace('100x100bb', '512x512bb', $data['results'][0]['artworkUrl100']);
+        }
+    }
+    
+    // Salvar no cache
+    $cache[$cacheKey] = [
+        'icon' => $appStoreIcon,
+        'timestamp' => time()
+    ];
+    
+    file_put_contents($cacheFile, json_encode($cache, JSON_PRETTY_PRINT));
+    
+    return $appStoreIcon;
+}
+
 // Função para obter lista de apps
 function getApps($baseDir) {
     $apps = [];
@@ -109,13 +167,39 @@ function getUserTimeline($baseDir, $userId) {
         if (!isset($timeline[$date])) {
             $timeline[$date] = [];
         }
+
+        // Verificar se existe screenshot para este evento
+        $eventDate = date('Y-m-d', $event['timestamp']);
+        $eventTimestamp = $event['timestamp'];
+        $eventName = $event['event'] ?? 'unknown';
+        
+        $screenshotFile = null;
+        $screenshotPath = $baseDir . '/events-screenshots/' . $userId . '/' . $eventDate;
+        
+        if (is_dir($screenshotPath)) {
+            // Procurar por arquivos que correspondam ao evento
+            $possibleFiles = glob($screenshotPath . '/event_' . $eventTimestamp . '_' . $eventName . '.jpg');
+            if (empty($possibleFiles)) {
+                // Fallback: procurar por padrões mais flexíveis
+                $possibleFiles = glob($screenshotPath . '/event_*_' . $eventName . '.jpg');
+            }
+            
+            if (!empty($possibleFiles)) {
+                $screenshotFile = basename($possibleFiles[0]);
+            }
+        }
         
         $timeline[$date][] = [
             'time' => $time,
             'timestamp' => $event['timestamp'],
             'event' => $event['event'] ?? 'unknown',
             'value' => $event['value'] ?? '',
-            'geo' => $event['geo'] ?? []
+            'geo' => $event['geo'] ?? [],
+            'hasScreenshot' => !is_null($screenshotFile),
+            'screenshot' => $screenshotFile ? [
+                'filename' => $screenshotFile,
+                'url' => 'event-screenshot.php?user=' . urlencode($userId) . '&date=' . urlencode($eventDate) . '&file=' . urlencode($screenshotFile)
+            ] : null
         ];
     }
     
@@ -146,20 +230,65 @@ function getStats($baseDir, $selectedApp = null) {
     
     if (!is_dir($baseDir)) return $stats;
     
+    // BUSCAR USUÁRIOS REGISTRADOS (pasta /users)
+    $allUsers = [];
+    $usersDir = $baseDir . '/users';
+    
+    if (is_dir($usersDir)) {
+        $userFolders = array_diff(scandir($usersDir), ['.', '..']);
+        
+        foreach ($userFolders as $userId) {
+            $userPath = $usersDir . '/' . $userId;
+            
+            if (is_dir($userPath) && !str_starts_with($userId, '.')) {
+                $latestFile = $userPath . '/latest.json';
+                
+                if (file_exists($latestFile)) {
+                    $userInfo = json_decode(file_get_contents($latestFile), true);
+                    
+                    if ($userInfo) {
+                        // Verificar se o usuário pertence ao app selecionado
+                        $userBundleId = $userInfo['userData']['bundleId'] ?? 
+                                      $userInfo['deviceInfo']['bundleId'] ?? null;
+                        
+                        if (!$selectedApp || $userBundleId === $selectedApp) {
+                            $allUsers[$userId] = [
+                                'userId' => $userId,
+                                'lastSeen' => $userInfo['receivedAt'] ?? $userInfo['timestamp'] ?? 0,
+                                'userData' => $userInfo['userData'] ?? [],
+                                'isRegisteredOnly' => true // Flag para indicar que é só registro
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     // Contar usuários únicos nos eventos
-    $uniqueUsers = [];
+    $uniqueUsers = $allUsers; // Começar com usuários registrados
     $allEvents = getAllEvents($baseDir, $selectedApp);
     $eventTypes = [];
     
     foreach ($allEvents as $event) {
         if (isset($event['userId'])) {
-            $uniqueUsers[$event['userId']] = true;
+            $userId = $event['userId'];
+            
+            // Se já existe, atualizar com dados do evento (mais recente)
+            if (!isset($uniqueUsers[$userId]) || $event['timestamp'] > $uniqueUsers[$userId]['lastSeen']) {
+                $uniqueUsers[$userId] = [
+                    'userId' => $userId,
+                    'lastSeen' => $event['timestamp'],
+                    'userData' => $event['userData'] ?? [],
+                    'isRegisteredOnly' => false // Tem eventos
+                ];
+            }
         }
         
         $eventName = $event['event'] ?? 'unknown';
         if (!isset($eventTypes[$eventName])) {
             $eventTypes[$eventName] = 0;
-        }
+            }
         $eventTypes[$eventName]++;
     }
     
@@ -175,29 +304,14 @@ function getStats($baseDir, $selectedApp = null) {
         ];
     }
     
-    // Usuários recentes baseados nos eventos
-    $recentUserEvents = [];
-    foreach ($allEvents as $event) {
-        if (isset($event['userId'])) {
-            $userId = $event['userId'];
-            if (!isset($recentUserEvents[$userId]) || $event['timestamp'] > $recentUserEvents[$userId]['lastSeen']) {
-                $recentUserEvents[$userId] = [
-                    'userId' => $userId,
-                    'lastSeen' => $event['timestamp'],
-                    'userData' => $event['userData'] ?? []
-                ];
-            }
-        }
-    }
+    // Usuários recentes (combinar registrados + com eventos)
+    uasort($uniqueUsers, function($a, $b) {
+            return $b['lastSeen'] - $a['lastSeen'];
+        });
     
-    // Ordenar por último evento
-    uasort($recentUserEvents, function($a, $b) {
-        return $b['lastSeen'] - $a['lastSeen'];
-    });
+    $stats['recentUsers'] = array_slice(array_values($uniqueUsers), 0, 10);
     
-    $stats['recentUsers'] = array_slice(array_values($recentUserEvents), 0, 10);
-    
-    // Contar sessões de screenshots
+    // Contar sessões de screenshots (mantido para compatibilidade, mas não usado no card principal)
     $screenshotsDir = $baseDir . '/screenshots';
     if (is_dir($screenshotsDir)) {
         $users = array_diff(scandir($screenshotsDir), ['.', '..']);
@@ -212,7 +326,7 @@ function getStats($baseDir, $selectedApp = null) {
                     $sessionPath = $userPath . '/' . $sessionDate;
                     
                     if (is_dir($sessionPath) && !str_starts_with($sessionDate, '.')) {
-                        $stats['totalSessions']++;
+                        // Não contabilizar no card principal - apenas adicionar aos screenshots
                         $screenshots = glob($sessionPath . '/*.jpg');
                         $stats['totalScreenshots'] += count($screenshots);
                     }
@@ -220,8 +334,15 @@ function getStats($baseDir, $selectedApp = null) {
             }
         }
     }
+
+    // Contar screenshots de eventos
+    $eventsScreenshotsDir = $baseDir . '/events-screenshots';
+    if (is_dir($eventsScreenshotsDir)) {
+        $eventScreenshots = glob($eventsScreenshotsDir . '/*/*/*.jpg');
+        $stats['totalScreenshots'] += count($eventScreenshots);
+    }
     
-    // Contar vídeos
+    // Contar vídeos (sessões gravadas) - ESTA É A CONTAGEM CORRETA PARA O CARD
     $videosDir = $baseDir . '/videos';
     if (is_dir($videosDir)) {
         $users = array_diff(scandir($videosDir), ['.', '..']);
@@ -232,6 +353,7 @@ function getStats($baseDir, $selectedApp = null) {
             if (is_dir($userPath) && !str_starts_with($userId, '.')) {
                 foreach (glob($userPath . '/*/*.mp4') as $videoFile) {
                     $stats['totalVideos']++;
+                    $stats['totalSessions']++; // Cada vídeo representa uma sessão gravada
                 }
             }
         }
@@ -273,6 +395,52 @@ function getUserSessions($baseDir, $userId) {
     });
     
     return $sessions;
+}
+
+// Função para obter screenshots de eventos de um usuário
+function getUserEventScreenshots($baseDir, $userId) {
+    $eventScreenshots = [];
+    $eventsScreenshotsDir = $baseDir . '/events-screenshots/' . $userId;
+    
+    if (is_dir($eventsScreenshotsDir)) {
+        // Percorrer todas as datas
+        foreach (glob($eventsScreenshotsDir . '/*') as $dateDir) {
+            if (is_dir($dateDir)) {
+                $date = basename($dateDir);
+                $screenshots = glob($dateDir . '/*.jpg');
+                
+                foreach ($screenshots as $screenshot) {
+                    $filename = basename($screenshot);
+                    $fileSize = filesize($screenshot);
+                    $fileTime = filemtime($screenshot);
+                    
+                    // Extrair informações do nome do arquivo (event_timestamp_eventname.jpg)
+                    if (preg_match('/^event_(\d+)_(.+)\.jpg$/', $filename, $matches)) {
+                        $timestamp = $matches[1];
+                        $eventName = str_replace('_', ' ', $matches[2]);
+                        
+                        $eventScreenshots[] = [
+                            'type' => 'event',
+                            'date' => $date,
+                            'filename' => $filename,
+                            'path' => 'event-screenshot.php?user=' . urlencode($userId) . '&date=' . urlencode($date) . '&file=' . urlencode($filename),
+                            'size' => $fileSize,
+                            'timestamp' => $timestamp,
+                            'eventName' => $eventName,
+                            'fileTime' => $fileTime
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    
+    // Ordenar por timestamp (mais recentes primeiro)
+    usort($eventScreenshots, function($a, $b) {
+        return $b['timestamp'] - $a['timestamp'];
+    });
+    
+    return $eventScreenshots;
 }
 
 // Função para obter vídeos de um usuário
@@ -375,18 +543,28 @@ function getUserData($baseDir, $userId) {
     $userData['allSessions'] = getUserSessions($baseDir, $userId);
     foreach ($userData['allSessions'] as $session) {
         $userData['totalScreenshots'] += $session['screenshotCount'];
-        
+                
         if ($session['metadata']) {
             $timestamp = $session['metadata']['timestamp'] ?? null;
             if ($timestamp) {
                 if (!$userData['firstSeen'] || $timestamp < $userData['firstSeen']) {
                     $userData['firstSeen'] = $timestamp;
-                }
+                    }
                 if (!$userData['lastSeen'] || $timestamp > $userData['lastSeen']) {
                     $userData['lastSeen'] = $timestamp;
+                    }
                 }
-            }
         }
+    }
+
+    // Screenshots de eventos (adicionar às sessões)
+    $userData['eventScreenshots'] = getUserEventScreenshots($baseDir, $userId);
+
+    // Adicionar screenshots de eventos na contagem total
+    $eventsScreenshotsDir = $baseDir . '/events-screenshots/' . $userId;
+    if (is_dir($eventsScreenshotsDir)) {
+        $eventScreenshots = glob($eventsScreenshotsDir . '/*/*.jpg');
+        $userData['totalScreenshots'] += count($eventScreenshots);
     }
     
     // Vídeos
@@ -638,10 +816,20 @@ $screenSizeOptions = [
                 <div class="apps-grid">
                     <?php if (!empty($apps)): ?>
                         <?php foreach ($apps as $app): ?>
+                        <?php
+                        // Buscar ícone da App Store para cada app
+                        $appStoreIcon = getAppStoreIcon($app['bundleId'], $baseDir);
+                        ?>
                         <div class="app-card">
                             <div class="app-header">
+                                <div class="app-icon-container">
+                                    <?php if ($appStoreIcon): ?>
+                                        <img src="<?= htmlspecialchars($appStoreIcon) ?>" alt="<?= htmlspecialchars($app['name']) ?>" class="app-store-icon">
+                                    <?php else: ?>
                                 <div class="app-icon">
-                                    <i class="fas fa-<?= $app['platform'] === 'ios' ? 'apple' : 'android' ?>"></i>
+                                            <i class="fab fa-<?= $app['platform'] === 'ios' ? 'apple' : 'android' ?>"></i>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <div class="app-info">
                                     <h3><?= htmlspecialchars($app['name']) ?></h3>
@@ -710,20 +898,33 @@ $screenSizeOptions = [
                         <i class="fas fa-arrow-left"></i> Voltar aos Apps
                     </a>
                     <div class="current-app">
+                        <div class="app-icon-container">
+                            <?php
+                            // Tentar buscar ícone da App Store pela API oficial
+                            $appStoreIcon = getAppStoreIcon($currentApp['bundleId'], $baseDir);
+                            ?>
+                            
+                            <?php if ($appStoreIcon): ?>
+                                <img src="<?= htmlspecialchars($appStoreIcon) ?>" alt="<?= htmlspecialchars($currentApp['name']) ?>" class="app-store-icon">
+                            <?php else: ?>
                         <div class="app-icon">
-                            <i class="fas fa-<?= $currentApp['platform'] === 'ios' ? 'apple' : 'android' ?>"></i>
+                                    <i class="fab fa-<?= $currentApp['platform'] === 'ios' ? 'apple' : 'android' ?>"></i>
+                                </div>
+                            <?php endif; ?>
                         </div>
                         <div class="app-details">
-                            <h2><?= htmlspecialchars($currentApp['name']) ?></h2>
-                            <p><?= htmlspecialchars($currentApp['bundleId']) ?></p>
+                            <h2>
                             <span class="platform-badge <?= $currentApp['platform'] ?>">
                                 <?= strtoupper($currentApp['platform']) ?>
                             </span>
+                                <?= htmlspecialchars($currentApp['name']) ?>
+                            </h2>
+                            <p><?= htmlspecialchars($currentApp['bundleId']) ?></p>
+                        </div>
                         </div>
                         <button onclick="editApp('<?= htmlspecialchars($currentApp['bundleId']) ?>')" class="btn btn-secondary">
                             <i class="fas fa-cog"></i> Configurar
                         </button>
-                    </div>
                 </div>
                 
                 <!-- Stats Cards -->
@@ -819,14 +1020,7 @@ $screenSizeOptions = [
                     <!-- Coluna 2: Dados do Usuário -->
                     <div class="panel">
                         <div class="panel-header">
-                            <div class="panel-header-left">
-                                <?php if ($selectedUser): ?>
-                                <a href="?app=<?= urlencode($selectedApp) ?>" class="btn btn-secondary">
-                                    <i class="fas fa-arrow-left"></i> Voltar
-                                </a>
-                                &nbsp;&nbsp;
-                                <?php endif; ?>
-                            </div>
+ 
                             <h2>
                                 <i class="fas fa-user-cog"></i> 
                                 <?php if ($selectedUser): ?>
@@ -850,7 +1044,7 @@ $screenSizeOptions = [
                             <div class="user-layout-container">
                                 
                                 <!-- Coluna Esquerda: Dados do Usuário -->
-                                <div class="user-details">
+                            <div class="user-details">
                                     <!-- Botão Atividades do Usuário (movido para cima) -->
                                     <div class="user-activities-button-container">
                                         <button class="open-tabs-overlay-btn" onclick="openTabsOverlay()">
@@ -867,7 +1061,7 @@ $screenSizeOptions = [
                                                     </div>
                                                     <div class="summary-stat">
                                                         <i class="fas fa-camera"></i>
-                                                        <span><?= count($userData['allSessions']) ?> Sessões</span>
+                                                        <span><?= $userData['totalScreenshots'] ?> Screenshots</span>
                                                     </div>
                                                 </div>
                                                 <div class="open-overlay-hint">
@@ -880,59 +1074,93 @@ $screenSizeOptions = [
 
                                     <!-- Grid 2x2 para Detail Sections -->
                                     <div class="user-details-grid">
-                                        <!-- Identificação -->
-                                        <div class="detail-section">
-                                            <h3><i class="fas fa-id-card"></i> Identificação</h3>
-                                            <div class="detail-grid">
-                                                <div class="detail-item">
-                                                    <label>User ID:</label>
-                                                    <span><?= htmlspecialchars($userData['userId']) ?></span>
-                                                </div>
-                                                <?php if ($userData['firstSeen']): ?>
-                                                <div class="detail-item">
-                                                    <label>Primeiro acesso:</label>
-                                                    <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
-                                                </div>
-                                                <?php endif; ?>
-                                                <?php if ($userData['lastSeen']): ?>
-                                                <div class="detail-item">
-                                                    <label>Último acesso:</label>
-                                                    <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
-                                                </div>
-                                                <?php endif; ?>
-                                            </div>
+                                <!-- Identificação -->
+                                <div class="detail-section">
+                                    <h3><i class="fas fa-id-card"></i> Identificação</h3>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <label>User ID:</label>
+                                            <span><?= htmlspecialchars($userData['userId']) ?></span>
                                         </div>
-
-                                        <!-- Estatísticas -->
-                                        <div class="detail-section">
-                                            <h3><i class="fas fa-chart-bar"></i> Estatísticas</h3>
-                                            <div class="detail-grid">
-                                                <div class="detail-item">
-                                                    <label>Total de sessões:</label>
-                                                    <span><?= count($userData['allSessions']) ?></span>
-                                                </div>
-                                                <div class="detail-item">
-                                                    <label>Total de screenshots:</label>
-                                                    <span><?= number_format($userData['totalScreenshots']) ?></span>
-                                                </div>
-                                                <div class="detail-item">
-                                                    <label>Total de eventos:</label>
-                                                    <span><?= number_format($userData['totalEvents']) ?></span>
-                                                </div>
-                                            </div>
+                                        <?php if ($userData['firstSeen']): ?>
+                                        <div class="detail-item">
+                                            <label>Primeiro acesso:</label>
+                                            <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
                                         </div>
+                                        <?php endif; ?>
+                                        <?php if ($userData['lastSeen']): ?>
+                                        <div class="detail-item">
+                                            <label>Último acesso:</label>
+                                            <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
+                                        </div>
+                                        <?php endif; ?>
 
-                                        <!-- Dados do App -->
-                                        <?php if (!empty($userData['latestInfo']['userData'])): ?>
-                                        <div class="detail-section">
-                                            <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
-                                            <div class="detail-grid">
-                                                <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
-                                                <div class="detail-item">
-                                                    <label><?= htmlspecialchars($key) ?>:</label>
-                                                    <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
-                                                </div>
-                                                <?php endforeach; ?>
+                                                <!-- Dados de Localização -->
+                                                <?php if (!empty($userData['geoData'])): ?>
+                                                    <?php if (!empty($userData['geoData']['country'])): ?>
+                                        <div class="detail-item">
+                                                        <label>País:</label>
+                                                        <span>
+                                                            <?php if (!empty($userData['geoData']['flag'])): ?>
+                                                                <?= $userData['geoData']['flag'] ?> 
+                                                            <?php endif; ?>
+                                                            <?= htmlspecialchars($userData['geoData']['country']) ?>
+                                                        </span>
+                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($userData['geoData']['region'])): ?>
+                                        <div class="detail-item">
+                                                        <label>Estado/Região:</label>
+                                                        <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
+                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($userData['geoData']['city'])): ?>
+                                        <div class="detail-item">
+                                                        <label>Cidade:</label>
+                                                        <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
+                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($userData['geoData']['ip'])): ?>
+                                                    <div class="detail-item">
+                                                        <label>IP:</label>
+                                                        <span><?= htmlspecialchars($userData['geoData']['ip']) ?></span>
+                                                    </div>
+                                                    <?php endif; ?>
+                                                <?php endif; ?>
+                                    </div>
+                                </div>
+
+                                <!-- Dados do App -->
+                                        <?php if (!empty($userData['latestInfo']['userData']) || !empty($userData['latestInfo']['deviceInfo'])): ?>
+                                <div class="detail-section">
+                                    <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
+                                    <div class="detail-grid">
+                                                <?php if (!empty($userData['latestInfo']['deviceInfo'])): ?>
+                                                    <?php $deviceInfo = $userData['latestInfo']['deviceInfo']; ?>
+                                                    <div class="detail-item">
+                                                        <label>App Version:</label>
+                                                        <span><?= htmlspecialchars($deviceInfo['appVersion'] ?? '1.0.0') ?></span>
+                                                    </div>
+                                                    <div class="detail-item">
+                                                        <label>Device:</label>
+                                                        <span><?= htmlspecialchars($deviceInfo['device'] ?? 'Unknown Device') ?></span>
+                                                    </div>
+                                                    <div class="detail-item">
+                                                        <label>Platform:</label>
+                                                        <span><?= htmlspecialchars($deviceInfo['platform'] ?? 'iOS') ?></span>
+                                                    </div>
+                                                <?php endif; ?>
+                                                
+                                                <?php if (!empty($userData['latestInfo']['userData'])): ?>
+                                        <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
+                                                        <?php if (!in_array($key, ['appVersion', 'device', 'platform', 'interactionCount', 'bundleId', 'lastAction', 'sessionStartTime', 'environment', 'initializedAt', 'initTime', 'initializeMethod', 'deviceIdentifier', 'deviceCommercialName'])): ?>
+                                        <div class="detail-item">
+                                            <label><?= htmlspecialchars($key) ?>:</label>
+                                            <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
+                                        </div>
+                                                        <?php endif; ?>
+                                        <?php endforeach; ?>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                         <?php else: ?>
@@ -943,57 +1171,9 @@ $screenSizeOptions = [
                                                 <div class="empty-data">
                                                     <p>Nenhum dado disponível</p>
                                                 </div>
-                                            </div>
-                                        </div>
-                                        <?php endif; ?>
-
-                                        <!-- Localização -->
-                                        <?php if (!empty($userData['geoData'])): ?>
-                                        <div class="detail-section">
-                                            <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
-                                            <div class="detail-grid">
-                                                <?php if (!empty($userData['geoData']['country'])): ?>
-                                                <div class="detail-item">
-                                                    <label>País:</label>
-                                                    <span>
-                                                        <?php if (!empty($userData['geoData']['flag'])): ?>
-                                                            <?= $userData['geoData']['flag'] ?> 
-                                                        <?php endif; ?>
-                                                        <?= htmlspecialchars($userData['geoData']['country']) ?>
-                                                    </span>
-                                                </div>
-                                                <?php endif; ?>
-                                                <?php if (!empty($userData['geoData']['region'])): ?>
-                                                <div class="detail-item">
-                                                    <label>Estado/Região:</label>
-                                                    <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
-                                                </div>
-                                                <?php endif; ?>
-                                                <?php if (!empty($userData['geoData']['city'])): ?>
-                                                <div class="detail-item">
-                                                    <label>Cidade:</label>
-                                                    <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
-                                                </div>
-                                                <?php endif; ?>
-                                                <?php if (!empty($userData['geoData']['ip'])): ?>
-                                                <div class="detail-item">
-                                                    <label>IP:</label>
-                                                    <span><?= htmlspecialchars($userData['geoData']['ip']) ?></span>
-                                                </div>
-                                                <?php endif; ?>
-                                            </div>
-                                        </div>
-                                        <?php else: ?>
-                                        <!-- Placeholder quando não há dados de localização -->
-                                        <div class="detail-section detail-section-empty">
-                                            <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
-                                            <div class="detail-grid">
-                                                <div class="empty-data">
-                                                    <p>Localização não disponível</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
                                     </div>
                                 </div>
                             </div>
@@ -1017,7 +1197,7 @@ $screenSizeOptions = [
                                                 <i class="fas fa-film"></i> Vídeos (<?= $userData['totalVideos'] ?>)
                                             </button>
                                             <button class="tab-btn" onclick="showTab('sessions')">
-                                                <i class="fas fa-camera"></i> Screenshots (<?= count($userData['allSessions']) ?>)
+                                                <i class="fas fa-camera"></i> Screenshots (<?= $userData['totalScreenshots'] ?>)
                                             </button>
                                         </div>
                                         
@@ -1029,6 +1209,21 @@ $screenSizeOptions = [
                                                 <?php foreach ($userData['timeline'] as $date => $dayEvents): ?>
                                                     <?php foreach ($dayEvents as $event): ?>
                                                     <div class="timeline-vertical-event">
+                                                        <!-- Thumbnail do screenshot do evento -->
+                                                        <?php if (!empty($event['hasScreenshot']) && !empty($event['screenshot'])): ?>
+                                                        <div class="event-thumbnail" 
+                                                             onclick="openScreenshotModal('<?= htmlspecialchars($event['screenshot']['url']) ?>', '<?= htmlspecialchars($event['event']) ?>')"
+                                                             style="cursor: pointer;">
+                                                            <img src="<?= htmlspecialchars($event['screenshot']['url']) ?>" 
+                                                                 alt="Event screenshot" 
+                                                                 loading="lazy">
+                                                        </div>
+                                                        <?php else: ?>
+                                                        <div class="event-thumbnail no-screenshot">
+                                                            <i class="fas fa-camera"></i>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                        
                                                         <div class="event-time-info">
                                                             <div class="event-date">
                                                                 <?= date('d/m/Y', $event['timestamp']) ?>
@@ -1044,13 +1239,18 @@ $screenSizeOptions = [
                                                             <div class="event-name">
                                                                 <i class="fas fa-tag"></i>
                                                                 <?= htmlspecialchars($event['event']) ?>
+                                                                <?php if (!empty($event['hasScreenshot'])): ?>
+                                                                <span class="screenshot-indicator">
+                                                                    <i class="fas fa-camera" title="Evento com screenshot"></i>
+                                                                </span>
+                                                                <?php endif; ?>
                                                             </div>
                                                             <?php if (!empty($event['value'])): ?>
                                                             <div class="event-value">
                                                                 <i class="fas fa-info-circle"></i>
                                                                 <?= htmlspecialchars($event['value']) ?>
-                                                            </div>
-                                                            <?php endif; ?>
+                                        </div>
+                                        <?php endif; ?>
                                                             <?php if (!empty($event['geo']) && !empty($event['geo']['flag']) && (!isset($event['geo']['error']) || $event['geo']['country'] !== 'Unknown')): ?>
                                                             <div class="event-location">
                                                                 <i class="fas fa-globe"></i>
@@ -1063,8 +1263,8 @@ $screenSizeOptions = [
                                                                 <?php else: ?>
                                                                     <?= htmlspecialchars($event['geo']['city'] ?? 'Localização indisponível') ?>
                                                                 <?php endif; ?>
-                                                            </div>
-                                                            <?php endif; ?>
+                                        </div>
+                                        <?php endif; ?>
                                                         </div>
                                                     </div>
                                                     <?php endforeach; ?>
@@ -1075,9 +1275,9 @@ $screenSizeOptions = [
                                                 <i class="fas fa-history"></i>
                                                 <h4>Nenhum evento registrado</h4>
                                                 <p>Os eventos do usuário aparecerão aqui quando forem capturados pelo app.</p>
-                                            </div>
-                                            <?php endif; ?>
                                         </div>
+                                        <?php endif; ?>
+                                    </div>
                                         
                                         <!-- Aba Vídeos - BOXES MENORES -->
                                         <div id="videos-tab" class="tab-content">
@@ -1087,7 +1287,7 @@ $screenSizeOptions = [
                                                 <?php foreach ($userData['allVideos'] as $video): ?>
                                                 <div class="video-card-compact">
                                                     <div class="video-thumbnail-compact">
-                                                        <video preload="metadata" muted onloadedmetadata="seekToMidpoint(this)">
+                                                        <video preload="metadata" muted>
                                                             <source src="<?= htmlspecialchars($video['path']) ?>" type="video/mp4">
                                                         </video>
                                                         <div class="video-overlay-compact">
@@ -1122,47 +1322,89 @@ $screenSizeOptions = [
                                                 <i class="fas fa-film"></i>
                                                 <h4>Nenhuma sessão gravada</h4>
                                                 <p>As sessões de vídeo aparecerão aqui quando o app for para background.</p>
-                                            </div>
-                                            <?php endif; ?>
-                                        </div>
-                                        
+                                </div>
+                                <?php endif; ?>
+                            </div>
+
                                         <!-- Aba Sessões (Screenshots) -->
                                         <div id="sessions-tab" class="tab-content">
-                                            <h3><i class="fas fa-camera"></i> Sessões de Screenshots</h3>
-                                            <?php if (!empty($userSessions)): ?>
-                                            <div class="sessions-grid">
-                                                <?php foreach ($userSessions as $session): ?>
-                                                <div class="session-card">
-                                                    <div class="session-thumbnail">
-                                                        <?php if ($session['firstScreenshot']): ?>
-                                                        <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
-                                                             alt="Session thumbnail" loading="lazy">
-                                                        <?php else: ?>
-                                                        <div class="no-thumbnail">
-                                                            <i class="fas fa-image"></i>
+                                            <h3><i class="fas fa-camera"></i> Screenshots</h3>
+                                            
+                                            <?php 
+                                            $hasTraditionalSessions = !empty($userSessions);
+                                            $hasEventScreenshots = !empty($userData['eventScreenshots']);
+                                            $hasAnyScreenshots = $hasTraditionalSessions || $hasEventScreenshots;
+                                            ?>
+                                            
+                                            <?php if ($hasAnyScreenshots): ?>
+                                            
+                                            <!-- Screenshots de Eventos -->
+                                            <?php if ($hasEventScreenshots): ?>
+                                            <div class="screenshots-section">
+                                                <h4><i class="fas fa-tag"></i> Screenshots de Eventos (<?= count($userData['eventScreenshots']) ?>)</h4>
+                                                <div class="event-screenshots-grid">
+                                                    <?php foreach ($userData['eventScreenshots'] as $eventScreenshot): ?>
+                                                    <div class="event-screenshot-card" 
+                                                         onclick="openScreenshotModal('<?= htmlspecialchars($eventScreenshot['path']) ?>', '<?= htmlspecialchars($eventScreenshot['eventName']) ?>')"
+                                                         style="cursor: pointer;">
+                                                        <div class="event-screenshot-thumbnail">
+                                                            <img src="<?= htmlspecialchars($eventScreenshot['path']) ?>" 
+                                                                 alt="Event screenshot" loading="lazy">
+                                                            <div class="event-screenshot-overlay">
+                                                                <i class="fas fa-search-plus"></i>
+                                                            </div>
                                                         </div>
-                                                        <?php endif; ?>
-                                                        <div class="session-overlay">
-                                                            <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
-                                                                <i class="fas fa-play"></i>
-                                                            </button>
+                                                        <div class="event-screenshot-info">
+                                                            <h5><?= htmlspecialchars($eventScreenshot['eventName']) ?></h5>
+                                                            <p><i class="fas fa-calendar"></i> <?= date('d/m H:i', $eventScreenshot['timestamp']) ?></p>
+                                                            <p><i class="fas fa-hdd"></i> <?= number_format($eventScreenshot['size'] / 1024, 1) ?> KB</p>
                                                         </div>
                                                     </div>
-                                                    <div class="session-info">
-                                                        <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
-                                                        <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
-                                                        <?php if (!empty($session['metadata']['timestamp'])): ?>
-                                                        <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
-                                                        <?php endif; ?>
-                                                    </div>
+                                                    <?php endforeach; ?>
                                                 </div>
-                                                <?php endforeach; ?>
                                             </div>
+                                            <?php endif; ?>
+                                            
+                                            <!-- Sessões Tradicionais -->
+                                            <?php if ($hasTraditionalSessions): ?>
+                                            <div class="screenshots-section">
+                                                <h4><i class="fas fa-images"></i> Sessões de Screenshots (<?= count($userSessions) ?>)</h4>
+                                                <div class="sessions-grid">
+                                                    <?php foreach ($userSessions as $session): ?>
+                                                    <div class="session-card">
+                                                        <div class="session-thumbnail">
+                                                            <?php if ($session['firstScreenshot']): ?>
+                                                            <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
+                                                                 alt="Session thumbnail" loading="lazy">
+                                                            <?php else: ?>
+                                                            <div class="no-thumbnail">
+                                                                <i class="fas fa-image"></i>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                            <div class="session-overlay">
+                                                                <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
+                                                                    <i class="fas fa-play"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <div class="session-info">
+                                                            <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
+                                                            <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
+                                                            <?php if (!empty($session['metadata']['timestamp'])): ?>
+                                                            <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
+                                            
                                             <?php else: ?>
                                             <div class="empty-sessions">
                                                 <i class="fas fa-camera"></i>
-                                                <h4>Nenhuma sessão encontrada</h4>
-                                                <p>As sessões de screenshot aparecerão aqui quando forem capturadas.</p>
+                                                <h4>Nenhum screenshot encontrado</h4>
+                                                <p>Screenshots de eventos e sessões aparecerão aqui quando forem capturados.</p>
                                             </div>
                                             <?php endif; ?>
                                         </div>
@@ -1344,29 +1586,6 @@ $screenSizeOptions = [
                 closeTabsOverlay();
             }
         });
-        
-        // Função para buscar 50% do tempo do vídeo como prévia
-        function seekToMidpoint(video) {
-            video.addEventListener('loadedmetadata', function() {
-                if (video.duration && video.duration > 0) {
-                    // Ir para 50% do tempo do vídeo
-                    video.currentTime = video.duration * 0.5;
-                }
-            });
-        }
-        
-        // Aplicar prévia aos vídeos compactos quando carregarem
-        document.addEventListener('DOMContentLoaded', function() {
-            const compactVideos = document.querySelectorAll('.video-thumbnail-compact video');
-            compactVideos.forEach(video => {
-                video.addEventListener('loadedmetadata', function() {
-                    if (this.duration && this.duration > 0) {
-                        // Ir para 50% do tempo do vídeo
-                        this.currentTime = this.duration * 0.5;
-                    }
-                });
-            });
-        });
 
         // Funções para controlar abas
         function showTab(tabName) {
@@ -1470,72 +1689,6 @@ $screenSizeOptions = [
                 });
             }
         }
-        
-        // Inicializar tooltips para eventos da timeline
-        document.addEventListener('DOMContentLoaded', function() {
-            // Adicionar hover para eventos da timeline
-            const timelineEvents = document.querySelectorAll('.timeline-event');
-            timelineEvents.forEach(event => {
-                const popup = event.querySelector('.event-popup');
-                
-                event.addEventListener('mouseenter', function() {
-                    popup.style.display = 'block';
-                    
-                    // Aguardar um frame para obter dimensões corretas
-                    requestAnimationFrame(() => {
-                        const rect = popup.getBoundingClientRect();
-                        const viewportWidth = window.innerWidth;
-                        const timelineContainer = popup.closest('.timeline-container');
-                        const containerRect = timelineContainer ? timelineContainer.getBoundingClientRect() : null;
-                        
-                        // Reset posicionamento
-                        popup.style.left = '50%';
-                        popup.style.right = 'auto';
-                        popup.style.transform = 'translateX(-50%)';
-                        
-                        // Verificar se está saindo pela direita
-                        if (rect.right > viewportWidth - 20) {
-                            popup.style.left = 'auto';
-                            popup.style.right = '0';
-                            popup.style.transform = 'none';
-                        }
-                        
-                        // Verificar se está saindo pela esquerda
-                        if (rect.left < 20) {
-                            popup.style.left = '0';
-                            popup.style.right = 'auto';
-                            popup.style.transform = 'none';
-                        }
-                        
-                        // Se o container tiver scroll, ajustar também
-                        if (containerRect && rect.right > containerRect.right - 20) {
-                            popup.style.left = 'auto';
-                            popup.style.right = '0';
-                            popup.style.transform = 'none';
-                        }
-                    });
-                });
-                
-                event.addEventListener('mouseleave', function() {
-                    popup.style.display = 'none';
-                    // Reset para posição padrão
-                    popup.style.left = '50%';
-                    popup.style.right = 'auto';
-                    popup.style.transform = 'translateX(-50%)';
-                });
-            });
-            
-            // // Auto-refresh da página a cada 30 segundos se não houver modal aberto
-            // setInterval(function() {
-            //     if (!document.querySelector('.modal[style*="flex"]') && !document.querySelector('.video-modal')) {
-            //         // Só recarregar se estiver na mesma página (evitar recarregar durante navegação)
-            //         if (document.visibilityState === 'visible') {
-            //             const currentParams = new URLSearchParams(window.location.search);
-            //             window.location.search = currentParams.toString();
-            //         }
-            //     }
-            // }, 30000);
-        });
         
         // Funções específicas do dashboard
         
@@ -1712,6 +1865,121 @@ $screenSizeOptions = [
                 closeEditAppModal();
             }
         });
+
+        // Funções para modal de screenshot - VERSÃO SUPER SIMPLES
+        function openScreenshotModal(imageUrl, eventName) {
+            console.log('🎯 Modal chamado:', imageUrl);
+            
+            // Versão super simples que sempre funciona
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: rgba(0, 0, 0, 0.9);
+                z-index: 99999;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            `;
+            
+            modal.innerHTML = `
+                <div style="position: relative; max-width: 90vw; max-height: 90vh; background: white; border-radius: 12px; overflow: hidden;">
+                    <div style="padding: 1rem 1.5rem; background: #667eea; color: white; display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0;">Screenshot: ${eventName}</h3>
+                        <button onclick="closeScreenshotModal()" style="background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer;">✕</button>
+                    </div>
+                    <div style="padding: 0; text-align: center;">
+                        <img src="${imageUrl}" alt="Screenshot" style="max-width: 100%; max-height: 83vh; cursor: pointer;" onclick="closeScreenshotModal()">
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Exibir imediatamente
+            setTimeout(() => {
+                modal.style.opacity = '1';
+            }, 10);
+            
+            // Fechar ao clicar fora
+            modal.onclick = function(e) {
+                if (e.target === modal) closeScreenshotModal();
+            };
+            
+            console.log('✅ Modal criado e exibido');
+        }
+        
+        function closeScreenshotModal() {
+            console.log('🚪 Fechando modal');
+            const modals = document.querySelectorAll('[style*="position: fixed"][style*="z-index: 99999"]');
+            modals.forEach(modal => {
+                modal.style.opacity = '0';
+                setTimeout(() => modal.remove(), 300);
+            });
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Função de teste para verificar se os cliques funcionam
+        function testModal() {
+            alert('🎯 Função JavaScript funcionando! Se você vê esta mensagem, o JS está OK.');
+            console.log('🧪 Teste de função executado');
+        }
+        
+        // Adicionar teste ao carregar a página
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Dashboard carregado - JavaScript funcionando');
+            
+            // Testar se openScreenshotModal existe
+            if (typeof openScreenshotModal === 'function') {
+                console.log('✅ Função openScreenshotModal encontrada');
+            } else {
+                console.error('❌ Função openScreenshotModal NÃO encontrada');
+            }
+            
+            // Adicionar evento de teste às imagens
+            const screenshots = document.querySelectorAll('.event-thumbnail img, .event-screenshot-thumbnail img');
+            console.log('📷 Encontradas', screenshots.length, 'imagens de screenshot');
+            
+            screenshots.forEach((img, index) => {
+                console.log(`📸 Imagem ${index + 1}:`, img.src);
+                console.log(`📸 Onclick da imagem ${index + 1}:`, img.getAttribute('onclick'));
+                
+                // Adicionar evento alternativo de teste
+                img.addEventListener('click', function(e) {
+                    console.log('🖱️ CLICK DETECTADO na imagem:', e.target.src);
+                    console.log('🖱️ Onclick attribute:', e.target.getAttribute('onclick'));
+                    
+                    // Tentar executar a função diretamente
+                    try {
+                        console.log('🧪 Tentando executar openScreenshotModal diretamente...');
+                        const imgSrc = e.target.src;
+                        const eventName = 'teste-direto';
+                        openScreenshotModal(imgSrc, eventName);
+                    } catch (error) {
+                        console.error('💥 Erro ao executar função diretamente:', error);
+                    }
+                });
+            });
+            
+            // Adicionar listener global para QUALQUER clique
+            document.addEventListener('click', function(e) {
+                if (e.target.tagName === 'IMG') {
+                    console.log('🖱️ CLIQUE EM QUALQUER IMAGEM:', e.target.src);
+                    console.log('🖱️ Classes da imagem:', e.target.className);
+                    console.log('🖱️ Onclick attr:', e.target.getAttribute('onclick'));
+                }
+            }, true); // capture = true para capturar antes de outros handlers
+        });
     </script>
 </body>
-</html> 
+</html>

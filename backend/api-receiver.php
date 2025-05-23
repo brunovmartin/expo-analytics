@@ -165,6 +165,17 @@ switch (true) {
         }
         break;
     
+    case strpos($uri, '/event-screenshot.php') === 0:
+        // Incluir o visualizador de screenshots de eventos
+        include __DIR__ . '/event-screenshot.php';
+        break;
+    
+    case strpos($uri, '/test-modal.html') === 0:
+        // Servir arquivo de teste
+        header('Content-Type: text/html; charset=UTF-8');
+        readfile(__DIR__ . '/test-modal.html');
+        break;
+    
     default:
         jsonResponse(['error' => 'Endpoint not found'], 404);
 }
@@ -308,15 +319,34 @@ function formatBytes($bytes, $precision = 2) {
 }
 
 // Handler para eventos
-function handleTrack($data) {
+function handleTrack($data = null) {
     global $baseDir;
+    
+    // Verificar se é um upload multipart (com screenshot)
+    $hasScreenshot = false;
+    $screenshotData = null;
+    
+    if ($_SERVER['CONTENT_TYPE'] && strpos($_SERVER['CONTENT_TYPE'], 'multipart/form-data') !== false) {
+        // Processar dados multipart
+        if (isset($_POST['eventData'])) {
+            $data = json_decode($_POST['eventData'], true);
+        }
+        
+        // Processar screenshot se presente
+        if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] === UPLOAD_ERR_OK) {
+            $screenshotData = file_get_contents($_FILES['screenshot']['tmp_name']);
+            $hasScreenshot = true;
+        }
+    }
     
     if (!$data || !isset($data['userId'])) {
         jsonResponse(['error' => 'Invalid data'], 400);
     }
     
     $userId = $data['userId'];
-    $date = date('Y-m-d');
+    $eventName = $data['event'] ?? 'unknown';
+    $timestamp = $data['timestamp'] ?? time();
+    $date = date('Y-m-d', (int)$timestamp);
     
     // Buscar dados geográficos pelo IP do usuário (cache por sessão)
     static $geoCache = [];
@@ -327,18 +357,39 @@ function handleTrack($data) {
     }
     $geoData = $geoCache[$clientIP];
     
-    // Criar diretório
+    // Criar diretório para eventos
     $eventsDir = $baseDir . '/events/' . $userId . '/' . $date;
     ensureDir($eventsDir);
+    
+    // Salvar screenshot se presente
+    $screenshotPath = null;
+    if ($hasScreenshot && $screenshotData) {
+        $screenshotsDir = $baseDir . '/events-screenshots/' . $userId . '/' . $date;
+        ensureDir($screenshotsDir);
+        
+        $screenshotFilename = 'event_' . (int)$timestamp . '_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $eventName) . '.jpg';
+        $screenshotPath = $screenshotsDir . '/' . $screenshotFilename;
+        
+        if (file_put_contents($screenshotPath, $screenshotData)) {
+            $screenshotSize = strlen($screenshotData);
+            saveLog("📸 Screenshot do evento salvo: $screenshotFilename (" . formatBytes($screenshotSize) . ")");
+        } else {
+            saveLog("❌ Erro ao salvar screenshot do evento");
+            $screenshotPath = null;
+        }
+    }
     
     // Preparar dados do evento
     $event = [
         'userId' => $userId,
-        'event' => $data['event'] ?? 'unknown',
+        'event' => $eventName,
         'value' => $data['value'] ?? '',
-        'timestamp' => $data['timestamp'] ?? time(),
+        'timestamp' => (int)$timestamp,
         'userData' => $data['userData'] ?? [],
         'geo' => $geoData,
+        'hasScreenshot' => $hasScreenshot,
+        'screenshotPath' => $screenshotPath ? basename($screenshotPath) : null,
+        'screenshotSize' => $hasScreenshot ? strlen($screenshotData ?? '') : 0,
         'receivedAt' => time()
     ];
     
@@ -346,8 +397,15 @@ function handleTrack($data) {
     $eventFile = $eventsDir . '/events_' . date('H') . '.jsonl';
     file_put_contents($eventFile, json_encode($event) . "\n", FILE_APPEND | LOCK_EX);
     
-    saveLog("Event tracked for user $userId: {$event['event']} from {$geoData['flag']} {$geoData['city']}");
-    jsonResponse(['success' => true]);
+    $screenshotInfo = $hasScreenshot ? " + screenshot" : "";
+    saveLog("📝 Evento '$eventName' do usuário $userId{$screenshotInfo} - {$geoData['flag']} {$geoData['city']}");
+    
+    jsonResponse([
+        'success' => true, 
+        'event' => $eventName,
+        'hasScreenshot' => $hasScreenshot,
+        'screenshotSize' => $hasScreenshot ? formatBytes(strlen($screenshotData ?? '')) : null
+    ]);
 }
 
 // Handler para inicialização/info do usuário
@@ -359,7 +417,8 @@ function handleInit($data) {
     }
     
     $userId = $data['userId'];
-    $date = date('Y-m-d');
+    $timestamp = $data['timestamp'] ?? time();
+    $date = date('Y-m-d', (int)$timestamp);
     
     // Buscar dados geográficos pelo IP do usuário
     $geoData = fetchGeoInfo();
@@ -368,26 +427,54 @@ function handleInit($data) {
     $userDir = $baseDir . '/users/' . $userId;
     ensureDir($userDir);
     
-    // Preparar dados do usuário
+    // Extrair informações detalhadas da userData
+    $userData = $data['userData'] ?? [];
+    
+    // PROCESSAR DADOS DE DISPOSITIVO NO BACKEND
+    $userData = processDeviceInfo($userData);
+    
+    $deviceInfo = $userData['device'] ?? 'Unknown Device';
+    $appVersion = $userData['appVersion'] ?? '1.0.0';
+    $bundleId = $userData['bundleId'] ?? 'unknown.app';
+    $platform = $userData['platform'] ?? 'iOS';
+    
+    // Preparar dados do usuário com informações organizadas
     $userInfo = [
         'userId' => $userId,
-        'userData' => $data['userData'] ?? [],
+        'userData' => $userData,
+        'deviceInfo' => [
+            'device' => $deviceInfo,
+            'platform' => $platform,
+            'appVersion' => $appVersion,
+            'bundleId' => $bundleId
+        ],
         'geo' => $geoData,
-        'timestamp' => $data['timestamp'] ?? time(),
+        'timestamp' => (int)$timestamp,
         'receivedAt' => time(),
-        'date' => $date
+        'date' => $date,
+        'sessionData' => [
+            'isFirstInit' => !file_exists($userDir . '/latest.json'),
+            'lastSeen' => time()
+        ]
     ];
     
     // Salvar informações do usuário
-    $userFile = $userDir . '/info_' . date('Y-m-d_H-i-s') . '.json';
+    $userFile = $userDir . '/info_' . date('Y-m-d_H-i-s', (int)$timestamp) . '.json';
     file_put_contents($userFile, json_encode($userInfo, JSON_PRETTY_PRINT));
     
     // Atualizar arquivo de usuário mais recente
     $latestFile = $userDir . '/latest.json';
     file_put_contents($latestFile, json_encode($userInfo, JSON_PRETTY_PRINT));
     
-    saveLog("User info updated for user $userId from {$geoData['flag']} {$geoData['country']}");
-    jsonResponse(['success' => true, 'geo' => $geoData]);
+    $newUserFlag = $userInfo['sessionData']['isFirstInit'] ? ' (NOVO)' : '';
+    saveLog("👤 Usuário $userId{$newUserFlag} - $deviceInfo - $appVersion - {$geoData['flag']} {$geoData['city']}");
+    
+    jsonResponse([
+        'success' => true, 
+        'geo' => $geoData,
+        'device' => $deviceInfo,
+        'isFirstInit' => $userInfo['sessionData']['isFirstInit']
+    ]);
 }
 
 // Handler para status
@@ -763,6 +850,13 @@ function updateUserLatestInfo($userId, $sessionData) {
     $latestInfo = file_exists($latestFile) ? 
         json_decode(file_get_contents($latestFile), true) : [];
     
+    // PROCESSAR DADOS DE DISPOSITIVO SE PRESENTES
+    $userData = $sessionData['userData'] ?? [];
+    if (!empty($userData)) {
+        $userData = processDeviceInfo($userData);
+        $sessionData['userData'] = $userData;
+    }
+    
     // Atualizar com dados da sessão mais recente
     $latestInfo = array_merge($latestInfo, [
         'userId' => $userId,
@@ -1048,6 +1142,77 @@ function getRealPublicIP() {
     }
     
     return null;
+}
+
+// Função para mapear identificadores de dispositivos para nomes comerciais
+function mapDeviceIdentifier($identifier) {
+    $deviceMap = [
+        // iPhone models
+        'iPhone14,4' => 'iPhone 13 mini',
+        'iPhone14,5' => 'iPhone 13',
+        'iPhone14,2' => 'iPhone 13 Pro',
+        'iPhone14,3' => 'iPhone 13 Pro Max',
+        'iPhone14,7' => 'iPhone 14',
+        'iPhone14,8' => 'iPhone 14 Plus',
+        'iPhone15,2' => 'iPhone 14 Pro',
+        'iPhone15,3' => 'iPhone 14 Pro Max',
+        'iPhone15,4' => 'iPhone 15',
+        'iPhone15,5' => 'iPhone 15 Plus',
+        'iPhone16,1' => 'iPhone 15 Pro',
+        'iPhone16,2' => 'iPhone 15 Pro Max',
+        'iPhone17,1' => 'iPhone 16 Pro',
+        'iPhone17,2' => 'iPhone 16 Pro Max',
+        'iPhone17,3' => 'iPhone 16',
+        'iPhone17,4' => 'iPhone 16 Plus',
+        
+        // iPad models
+        'iPad13,18' => 'iPad Pro 12.9 (6th gen)',
+        'iPad13,19' => 'iPad Pro 12.9 (6th gen)',
+        'iPad14,3' => 'iPad Pro 11 (4th gen)',
+        'iPad14,4' => 'iPad Pro 11 (4th gen)',
+        'iPad13,16' => 'iPad Air (5th gen)',
+        'iPad13,17' => 'iPad Air (5th gen)',
+        'iPad14,10' => 'iPad Air (6th gen)',
+        'iPad14,11' => 'iPad Air (6th gen)',
+        
+        // Simulators
+        'x86_64' => 'iOS Simulator',
+        'i386' => 'iOS Simulator',
+        'arm64' => 'iOS Simulator'
+    ];
+    
+    return $deviceMap[$identifier] ?? $identifier;
+}
+
+// Função para processar dados de dispositivo
+function processDeviceInfo($userData) {
+    if (isset($userData['device'])) {
+        // Extrair identificador do formato "x86_64 (iOS Simulator)" -> "x86_64"
+        $deviceString = $userData['device'];
+        
+        // Se já está no formato "identificador (nome comercial)", extrair apenas o identificador
+        if (preg_match('/^([^\s]+)\s*\(/', $deviceString, $matches)) {
+            $identifier = $matches[1];
+        } else {
+            $identifier = $deviceString;
+        }
+        
+        // Mapear para nome comercial
+        $commercialName = mapDeviceIdentifier($identifier);
+        
+        // Se o identificador é diferente do nome comercial, criar formato completo
+        if ($identifier !== $commercialName) {
+            $userData['device'] = "$identifier ($commercialName)";
+            $userData['deviceIdentifier'] = $identifier;
+            $userData['deviceCommercialName'] = $commercialName;
+        } else {
+            $userData['device'] = $identifier;
+            $userData['deviceIdentifier'] = $identifier;
+            $userData['deviceCommercialName'] = $identifier;
+        }
+    }
+    
+    return $userData;
 }
 
 saveLog("Request completed");

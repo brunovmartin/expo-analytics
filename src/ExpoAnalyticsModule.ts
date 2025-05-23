@@ -19,7 +19,12 @@ declare class ExpoAnalyticsModule extends NativeModule<ExpoAnalyticsModuleEvents
   /**
    * Busca configurações do app no servidor pelo bundle ID
    */
-  fetchAppConfig(apiHost: string, bundleId?: string): Promise<AppConfig>;
+  fetchAppConfig(apiHost?: string, bundleId?: string): Promise<AppConfig>;
+  
+  /**
+   * Inicializa o sistema e cadastra o usuário automaticamente
+   */
+  init(options?: StartOptions): Promise<void>;
   
   /**
    * Inicia a captura de screenshots e análise
