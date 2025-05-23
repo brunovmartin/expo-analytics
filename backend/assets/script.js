@@ -308,7 +308,7 @@ function autoRefresh() {
 }
 
 // Configurar auto-refresh
-setInterval(autoRefresh, 30000);
+// setInterval(autoRefresh, 30000);
 
 // Fechar modal com ESC
 document.addEventListener('keydown', function(e) {

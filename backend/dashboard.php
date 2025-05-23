@@ -849,149 +849,152 @@ $screenSizeOptions = [
                             <!-- Layout Principal: Duas Colunas -->
                             <div class="user-layout-container">
                                 
-                                <!-- Coluna Esquerda: Dados do Usuário em Grid 2x2 -->
-                                <div class="user-details-grid">
-                                    <!-- Identificação -->
-                                    <div class="detail-section">
-                                        <h3><i class="fas fa-id-card"></i> Identificação</h3>
-                                        <div class="detail-grid">
-                                            <div class="detail-item">
-                                                <label>User ID:</label>
-                                                <span><?= htmlspecialchars($userData['userId']) ?></span>
-                                            </div>
-                                            <?php if ($userData['firstSeen']): ?>
-                                            <div class="detail-item">
-                                                <label>Primeiro acesso:</label>
-                                                <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
-                                            </div>
-                                            <?php endif; ?>
-                                            <?php if ($userData['lastSeen']): ?>
-                                            <div class="detail-item">
-                                                <label>Último acesso:</label>
-                                                <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
-                                            </div>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
-
-                                    <!-- Estatísticas -->
-                                    <div class="detail-section">
-                                        <h3><i class="fas fa-chart-bar"></i> Estatísticas</h3>
-                                        <div class="detail-grid">
-                                            <div class="detail-item">
-                                                <label>Total de sessões:</label>
-                                                <span><?= count($userData['allSessions']) ?></span>
-                                            </div>
-                                            <div class="detail-item">
-                                                <label>Total de screenshots:</label>
-                                                <span><?= number_format($userData['totalScreenshots']) ?></span>
-                                            </div>
-                                            <div class="detail-item">
-                                                <label>Total de eventos:</label>
-                                                <span><?= number_format($userData['totalEvents']) ?></span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Dados do App -->
-                                    <?php if (!empty($userData['latestInfo']['userData'])): ?>
-                                    <div class="detail-section">
-                                        <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
-                                        <div class="detail-grid">
-                                            <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
-                                            <div class="detail-item">
-                                                <label><?= htmlspecialchars($key) ?>:</label>
-                                                <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
-                                            </div>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    </div>
-                                    <?php else: ?>
-                                    <!-- Placeholder quando não há dados do app -->
-                                    <div class="detail-section detail-section-empty">
-                                        <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
-                                        <div class="detail-grid">
-                                            <div class="empty-data">
-                                                <p>Nenhum dado disponível</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <?php endif; ?>
-
-                                    <!-- Localização -->
-                                    <?php if (!empty($userData['geoData'])): ?>
-                                    <div class="detail-section">
-                                        <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
-                                        <div class="detail-grid">
-                                            <?php if (!empty($userData['geoData']['country'])): ?>
-                                            <div class="detail-item">
-                                                <label>País:</label>
-                                                <span>
-                                                    <?php if (!empty($userData['geoData']['flag'])): ?>
-                                                        <?= $userData['geoData']['flag'] ?> 
-                                                    <?php endif; ?>
-                                                    <?= htmlspecialchars($userData['geoData']['country']) ?>
-                                                </span>
-                                            </div>
-                                            <?php endif; ?>
-                                            <?php if (!empty($userData['geoData']['region'])): ?>
-                                            <div class="detail-item">
-                                                <label>Estado/Região:</label>
-                                                <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
-                                            </div>
-                                            <?php endif; ?>
-                                            <?php if (!empty($userData['geoData']['city'])): ?>
-                                            <div class="detail-item">
-                                                <label>Cidade:</label>
-                                                <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
-                                            </div>
-                                            <?php endif; ?>
-                                            <?php if (!empty($userData['geoData']['ip'])): ?>
-                                            <div class="detail-item">
-                                                <label>IP:</label>
-                                                <span><?= htmlspecialchars($userData['geoData']['ip']) ?></span>
-                                            </div>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
-                                    <?php else: ?>
-                                    <!-- Placeholder quando não há dados de localização -->
-                                    <div class="detail-section detail-section-empty">
-                                        <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
-                                        <div class="detail-grid">
-                                            <div class="empty-data">
-                                                <p>Localização não disponível</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <?php endif; ?>
-                                </div>
-
-                                <!-- Coluna Direita: Botão para Abas de Conteúdo -->
-                                <div class="user-tabs-summary">
-                                    <button class="open-tabs-overlay-btn" onclick="openTabsOverlay()">
-                                        <div class="tabs-summary-content">
-                                            <h3><i class="fas fa-chart-line"></i> Atividades do Usuário</h3>
-                                            <div class="tabs-summary-stats">
-                                                <div class="summary-stat">
-                                                    <i class="fas fa-history"></i>
-                                                    <span><?= $userData['totalEvents'] ?> Eventos</span>
+                                <!-- Coluna Esquerda: Dados do Usuário -->
+                                <div class="user-details">
+                                    <!-- Botão Atividades do Usuário (movido para cima) -->
+                                    <div class="user-activities-button-container">
+                                        <button class="open-tabs-overlay-btn" onclick="openTabsOverlay()">
+                                            <div class="tabs-summary-content">
+                                                <h3><i class="fas fa-chart-line"></i> Atividades do Usuário</h3>
+                                                <div class="tabs-summary-stats">
+                                                    <div class="summary-stat">
+                                                        <i class="fas fa-history"></i>
+                                                        <span><?= $userData['totalEvents'] ?> Eventos</span>
+                                                    </div>
+                                                    <div class="summary-stat">
+                                                        <i class="fas fa-film"></i>
+                                                        <span><?= $userData['totalVideos'] ?> Vídeos</span>
+                                                    </div>
+                                                    <div class="summary-stat">
+                                                        <i class="fas fa-camera"></i>
+                                                        <span><?= count($userData['allSessions']) ?> Sessões</span>
+                                                    </div>
                                                 </div>
-                                                <div class="summary-stat">
-                                                    <i class="fas fa-film"></i>
-                                                    <span><?= $userData['totalVideos'] ?> Vídeos</span>
-                                                </div>
-                                                <div class="summary-stat">
-                                                    <i class="fas fa-camera"></i>
-                                                    <span><?= count($userData['allSessions']) ?> Sessões</span>
+                                                <div class="open-overlay-hint">
+                                                    <i class="fas fa-expand"></i>
+                                                    Clique para visualizar detalhes
                                                 </div>
                                             </div>
-                                            <div class="open-overlay-hint">
-                                                <i class="fas fa-expand"></i>
-                                                Clique para visualizar detalhes
+                                        </button>
+                                    </div>
+
+                                    <!-- Grid 2x2 para Detail Sections -->
+                                    <div class="user-details-grid">
+                                        <!-- Identificação -->
+                                        <div class="detail-section">
+                                            <h3><i class="fas fa-id-card"></i> Identificação</h3>
+                                            <div class="detail-grid">
+                                                <div class="detail-item">
+                                                    <label>User ID:</label>
+                                                    <span><?= htmlspecialchars($userData['userId']) ?></span>
+                                                </div>
+                                                <?php if ($userData['firstSeen']): ?>
+                                                <div class="detail-item">
+                                                    <label>Primeiro acesso:</label>
+                                                    <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
+                                                </div>
+                                                <?php endif; ?>
+                                                <?php if ($userData['lastSeen']): ?>
+                                                <div class="detail-item">
+                                                    <label>Último acesso:</label>
+                                                    <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
+                                                </div>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
-                                    </button>
+
+                                        <!-- Estatísticas -->
+                                        <div class="detail-section">
+                                            <h3><i class="fas fa-chart-bar"></i> Estatísticas</h3>
+                                            <div class="detail-grid">
+                                                <div class="detail-item">
+                                                    <label>Total de sessões:</label>
+                                                    <span><?= count($userData['allSessions']) ?></span>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <label>Total de screenshots:</label>
+                                                    <span><?= number_format($userData['totalScreenshots']) ?></span>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <label>Total de eventos:</label>
+                                                    <span><?= number_format($userData['totalEvents']) ?></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Dados do App -->
+                                        <?php if (!empty($userData['latestInfo']['userData'])): ?>
+                                        <div class="detail-section">
+                                            <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
+                                            <div class="detail-grid">
+                                                <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
+                                                <div class="detail-item">
+                                                    <label><?= htmlspecialchars($key) ?>:</label>
+                                                    <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
+                                                </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
+                                        <?php else: ?>
+                                        <!-- Placeholder quando não há dados do app -->
+                                        <div class="detail-section detail-section-empty">
+                                            <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
+                                            <div class="detail-grid">
+                                                <div class="empty-data">
+                                                    <p>Nenhum dado disponível</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <?php endif; ?>
+
+                                        <!-- Localização -->
+                                        <?php if (!empty($userData['geoData'])): ?>
+                                        <div class="detail-section">
+                                            <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
+                                            <div class="detail-grid">
+                                                <?php if (!empty($userData['geoData']['country'])): ?>
+                                                <div class="detail-item">
+                                                    <label>País:</label>
+                                                    <span>
+                                                        <?php if (!empty($userData['geoData']['flag'])): ?>
+                                                            <?= $userData['geoData']['flag'] ?> 
+                                                        <?php endif; ?>
+                                                        <?= htmlspecialchars($userData['geoData']['country']) ?>
+                                                    </span>
+                                                </div>
+                                                <?php endif; ?>
+                                                <?php if (!empty($userData['geoData']['region'])): ?>
+                                                <div class="detail-item">
+                                                    <label>Estado/Região:</label>
+                                                    <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
+                                                </div>
+                                                <?php endif; ?>
+                                                <?php if (!empty($userData['geoData']['city'])): ?>
+                                                <div class="detail-item">
+                                                    <label>Cidade:</label>
+                                                    <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
+                                                </div>
+                                                <?php endif; ?>
+                                                <?php if (!empty($userData['geoData']['ip'])): ?>
+                                                <div class="detail-item">
+                                                    <label>IP:</label>
+                                                    <span><?= htmlspecialchars($userData['geoData']['ip']) ?></span>
+                                                </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                        <?php else: ?>
+                                        <!-- Placeholder quando não há dados de localização -->
+                                        <div class="detail-section detail-section-empty">
+                                            <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
+                                            <div class="detail-grid">
+                                                <div class="empty-data">
+                                                    <p>Localização não disponível</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1522,16 +1525,16 @@ $screenSizeOptions = [
                 });
             });
             
-            // Auto-refresh da página a cada 30 segundos se não houver modal aberto
-            setInterval(function() {
-                if (!document.querySelector('.modal[style*="flex"]') && !document.querySelector('.video-modal')) {
-                    // Só recarregar se estiver na mesma página (evitar recarregar durante navegação)
-                    if (document.visibilityState === 'visible') {
-                        const currentParams = new URLSearchParams(window.location.search);
-                        window.location.search = currentParams.toString();
-                    }
-                }
-            }, 30000);
+            // // Auto-refresh da página a cada 30 segundos se não houver modal aberto
+            // setInterval(function() {
+            //     if (!document.querySelector('.modal[style*="flex"]') && !document.querySelector('.video-modal')) {
+            //         // Só recarregar se estiver na mesma página (evitar recarregar durante navegação)
+            //         if (document.visibilityState === 'visible') {
+            //             const currentParams = new URLSearchParams(window.location.search);
+            //             window.location.search = currentParams.toString();
+            //         }
+            //     }
+            // }, 30000);
         });
         
         // Funções específicas do dashboard
