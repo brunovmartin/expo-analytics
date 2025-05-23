@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Alert, ScrollView, Switch } from 'react-native';
 import { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ExpoAnalytics from 'expo-analytics';
 
 export default function App() {
@@ -8,11 +9,35 @@ export default function App() {
     const [apiHost, setApiHost] = useState('http://localhost:8080');
     const [appConfig, setAppConfig] = useState<any>(null);
     const [configLoading, setConfigLoading] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState<string>('');
 
     useEffect(() => {
-        // Buscar configurações ao carregar o app
+        // Inicializar userId persistente e buscar configurações
+        initializeUser();
         fetchAppConfiguration();
     }, []);
+
+    const initializeUser = async () => {
+        try {
+            let userId = await AsyncStorage.getItem('expo_analytics_user_id');
+            
+            if (!userId) {
+                // Gerar userId único apenas na primeira vez
+                userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                await AsyncStorage.setItem('expo_analytics_user_id', userId);
+                console.log('✅ Novo usuário criado:', userId);
+            } else {
+                console.log('✅ Usuário existente recuperado:', userId);
+            }
+            
+            setCurrentUserId(userId);
+        } catch (error) {
+            console.error('❌ Erro ao inicializar usuário:', error);
+            // Fallback para userId temporário se AsyncStorage falhar
+            const fallbackUserId = 'temp-user-' + Date.now();
+            setCurrentUserId(fallbackUserId);
+        }
+    };
 
     const fetchAppConfiguration = async () => {
         setConfigLoading(true);
@@ -29,21 +54,27 @@ export default function App() {
     };
 
     const handleStart = async () => {
+        if (!currentUserId) {
+            Alert.alert('Erro', 'ID do usuário não foi inicializado');
+            return;
+        }
+
         try {
             await ExpoAnalytics.start({
                 apiHost: apiHost,
-                userId: 'user-' + Math.random().toString(36).substr(2, 9),
+                userId: currentUserId, // Usar o userId persistente
                 userData: {
                     appVersion: '1.0.0',
                     platform: 'iOS',
                     device: 'iPhone',
-                    environment: 'development'
+                    environment: 'development',
+                    sessionStartTime: new Date().toISOString()
                 }
             });
             
             setIsRecording(true);
-            console.log('✅ ExpoAnalytics iniciado');
-            Alert.alert('Sucesso', 'Analytics iniciado com sucesso!');
+            console.log('✅ ExpoAnalytics iniciado com usuário:', currentUserId);
+            Alert.alert('Sucesso', `Analytics iniciado com usuário: ${currentUserId}`);
         } catch (error) {
             console.error('❌ Erro ao iniciar ExpoAnalytics:', error);
             Alert.alert('Erro', 'Não foi possível iniciar o analytics');

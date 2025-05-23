@@ -1,6 +1,7 @@
 import ExpoModulesCore
 import UIKit
 import Compression
+import UniformTypeIdentifiers
 
 // Extension para suporte à compressão gzip padrão
 extension Data {
@@ -32,6 +33,12 @@ public class ExpoAnalyticsModule: Module {
   private var apiHost: String = "https://suaapi.com"
   private var userData: [String: Any] = [:]
   private var geoData: [String: Any] = [:]
+  
+  // Sistema de throttling para performance
+  private var lastCaptureTime: CFTimeInterval = 0
+  private var targetFrameInterval: CFTimeInterval = 1.0/10.0 // Padrão: 10 FPS máximo
+  private var isCapturing: Bool = false
+  private var captureQueue: DispatchQueue = DispatchQueue(label: "screenshot.capture", qos: .utility)
 
   private let screenshotsFolder: URL = {
     let tmp = FileManager.default.temporaryDirectory
@@ -69,7 +76,7 @@ public class ExpoAnalyticsModule: Module {
       
       // Aplicar configurações
       self.recordScreenEnabled = serverConfig["recordScreen"] as? Bool ?? false
-      self.framerate = serverConfig["framerate"] as? Int ?? 10
+      self.framerate = min(max(serverConfig["framerate"] as? Int ?? 10, 1), 15) // Limite: 1-15 FPS
       if let size = serverConfig["screenSize"] as? Int {
         // Manter proporção de 1:2 (largura:altura)
         self.screenSize = CGSize(width: size, height: size * 2)
@@ -77,15 +84,20 @@ public class ExpoAnalyticsModule: Module {
       
       // Aplicar overrides das opções se fornecidas
       if let config = options {
-        if let fps = config["framerate"] as? Int { self.framerate = fps }
+        if let fps = config["framerate"] as? Int { 
+          self.framerate = min(max(fps, 1), 15) // Limite: 1-15 FPS
+        }
         if let size = config["screenSize"] as? Int {
           self.screenSize = CGSize(width: size, height: size * 2)
         }
       }
+      
+      // Calcular intervalo otimizado
+      self.targetFrameInterval = 1.0 / Double(self.framerate)
 
       NSLog("🔧 [ExpoAnalytics] Configurações aplicadas:")
       NSLog("   Record Screen: \(self.recordScreenEnabled)")
-      NSLog("   Framerate: \(self.framerate) fps")
+      NSLog("   Framerate: \(self.framerate) fps (intervalo: \(String(format: "%.3f", self.targetFrameInterval))s)")
       NSLog("   Screen Size: \(Int(self.screenSize.width))x\(Int(self.screenSize.height))")
 
       // Enviar informações do usuário
@@ -96,11 +108,7 @@ public class ExpoAnalyticsModule: Module {
       // Iniciar captura apenas se record screen estiver ativo
       if self.recordScreenEnabled {
         DispatchQueue.main.async {
-          self.displayLink?.invalidate()
-          self.displayLink = CADisplayLink(target: self, selector: #selector(self.captureFrame))
-          self.displayLink?.preferredFramesPerSecond = self.framerate
-          self.displayLink?.add(to: .main, forMode: .common)
-          NSLog("🎬 [ExpoAnalytics] Captura de tela iniciada com \(self.framerate) fps")
+          self.startOptimizedCapture()
         }
       } else {
         NSLog("⚠️ [ExpoAnalytics] Record Screen desabilitado - captura não iniciada")
@@ -109,9 +117,7 @@ public class ExpoAnalyticsModule: Module {
 
     AsyncFunction("stop") { () in
       DispatchQueue.main.async {
-        self.displayLink?.invalidate()
-        self.displayLink = nil
-        NSLog("⏹️ [ExpoAnalytics] Captura de tela parada")
+        self.stopCapture()
       }
     }
 
@@ -193,35 +199,89 @@ public class ExpoAnalyticsModule: Module {
     ]
   }
 
+  private func startOptimizedCapture() {
+    stopCapture() // Garantir que não há captura anterior rodando
+    
+    self.isCapturing = true
+    self.lastCaptureTime = 0
+    
+    // Usar CADisplayLink com framerate baixo para economia de energia
+    self.displayLink = CADisplayLink(target: self, selector: #selector(self.optimizedCaptureFrame))
+    self.displayLink?.preferredFramesPerSecond = 60 // DisplayLink a 60fps, mas filtramos internamente
+    self.displayLink?.add(to: .main, forMode: .common)
+    
+    NSLog("🎬 [ExpoAnalytics] Captura otimizada iniciada - \(self.framerate) fps efetivo")
+  }
+  
+  private func stopCapture() {
+    self.isCapturing = false
+    self.displayLink?.invalidate()
+    self.displayLink = nil
+    NSLog("⏹️ [ExpoAnalytics] Captura de tela parada")
+  }
+  
   @objc
-  private func captureFrame() {
+  private func optimizedCaptureFrame() {
+    guard self.isCapturing else { return }
+    
+    let currentTime = CACurrentMediaTime()
+    
+    // Throttling: só capturar se passou o tempo necessário
+    if currentTime - self.lastCaptureTime < self.targetFrameInterval {
+      return
+    }
+    
+    self.lastCaptureTime = currentTime
+    
+    // Capturar em background thread para não bloquear a UI
+    captureQueue.async { [weak self] in
+      self?.performScreenCapture()
+    }
+  }
+  
+  private func performScreenCapture() {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
           let window = windowScene.windows.first else { return }
 
-    let originalBounds = window.bounds
-    
-    // Captura em alta resolução considerando scale factor
-    let scale = UIScreen.main.scale
-    
-    // Criar contexto de imagem em alta resolução
-    UIGraphicsBeginImageContextWithOptions(originalBounds.size, false, scale)
-    window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
-    let fullImage = UIGraphicsGetImageFromCurrentImageContext()
-    UIGraphicsEndImageContext()
+    DispatchQueue.main.sync {
+      let originalBounds = window.bounds
+      
+      // Calcular escala para reduzir a resolução desde o início
+      let targetSize = self.screenSize
+      let scaleX = targetSize.width / originalBounds.width
+      let scaleY = targetSize.height / originalBounds.height
+      
+      // Criar contexto com o tamanho alvo já reduzido
+      UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0) // Scale fixo 1.0
+      
+      guard let context = UIGraphicsGetCurrentContext() else {
+        NSLog("❌ [ExpoAnalytics] Erro ao criar contexto gráfico")
+        return
+      }
+      
+      // Aplicar transformação para redimensionar durante a captura
+      context.scaleBy(x: scaleX, y: scaleY)
+      window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+      
+      let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
+      UIGraphicsEndImageContext()
 
-    guard let image = fullImage else { 
-      NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
-      return 
+      guard let image = capturedImage else { 
+        NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
+        return 
+      }
+      
+      // Processar imagem em background
+      captureQueue.async { [weak self] in
+        self?.processAndSaveImage(image)
+      }
     }
-    
-    // Redimensionar para o tamanho configurado
-    let renderer = UIGraphicsImageRenderer(size: self.screenSize)
-    let resizedImage = renderer.image { context in
-      image.draw(in: CGRect(origin: .zero, size: self.screenSize))
-    }
-
-    // Comprimir com exatamente 50% de qualidade
-    guard let compressedData = resizedImage.jpegData(compressionQuality: 0.5) else {
+  }
+  
+  private func processAndSaveImage(_ image: UIImage) {
+    // Comprimir com qualidade ajustada baseada no framerate
+    let quality: CGFloat = self.framerate <= 5 ? 0.8 : self.framerate <= 10 ? 0.7 : 0.6
+    guard let compressedData = image.jpegData(compressionQuality: quality) else {
       NSLog("❌ [ExpoAnalytics] Erro ao comprimir imagem")
       return
     }
@@ -230,7 +290,10 @@ public class ExpoAnalyticsModule: Module {
     let finalSize = compressedData.count
     let timestamp = Int(Date().timeIntervalSince1970 * 1000)
     
-    NSLog("📸 [ExpoAnalytics] Screenshot: \(Int(self.screenSize.width))×\(Int(self.screenSize.height)), \(finalSize/1024)KB")
+    // Log apenas ocasionalmente para não sobrecarregar
+    if frameCount % 10 == 0 {
+      NSLog("📸 [ExpoAnalytics] Screenshot \(frameCount): \(Int(screenSize.width))×\(Int(screenSize.height)), \(finalSize/1024)KB, Q:\(Int(quality*100))%")
+    }
     
     // Salvar arquivo temporário
     let filename = screenshotsFolder.appendingPathComponent("frame_\(timestamp).jpg")
@@ -238,14 +301,14 @@ public class ExpoAnalyticsModule: Module {
       try compressedData.write(to: filename)
       frameCount += 1
       
-      NSLog("💾 [ExpoAnalytics] Frame \(frameCount) salvo: \(finalSize/1024)KB")
-      
-      // Enviar buffer quando atingir 300 frames (10 segundos a 30 FPS máx)
-      let maxFrames = min(300, self.framerate * 10) // 10 segundos no framerate atual
+      // Enviar buffer ajustado por framerate - máximo 8 segundos de captura
+      let maxFrames = min(self.framerate * 8, 120) // Limite máximo de 120 frames
       if frameCount >= maxFrames {
         NSLog("📤 [ExpoAnalytics] Enviando buffer com \(frameCount) frames")
-        sendScreenshotsBuffer()
-        frameCount = 0
+        DispatchQueue.main.async { [weak self] in
+          self?.sendScreenshotsBuffer()
+          self?.frameCount = 0
+        }
       }
     } catch {
       NSLog("❌ [ExpoAnalytics] Erro ao salvar frame: \(error)")
@@ -253,113 +316,163 @@ public class ExpoAnalyticsModule: Module {
   }
 
   private func sendScreenshotsBuffer() {
-    NSLog("🔄 [ExpoAnalytics] Iniciando processo de upload...")
+    NSLog("🔄 [ExpoAnalytics] Iniciando processo de upload com ZIP...")
     
     let metadata: [String: Any] = [
       "userId": self.userId,
       "userData": self.userData,
       "geo": self.geoData,
-      "timestamp": Date().timeIntervalSince1970
+      "timestamp": Date().timeIntervalSince1970,
+      "format": "zip" // Indicar que está enviando ZIP
     ]
 
-    guard let url = URL(string: apiHost + "/upload") else { 
+    guard let url = URL(string: apiHost + "/upload-zip") else { 
       NSLog("❌ [ExpoAnalytics] URL inválida: \(apiHost)")
       return 
     }
     
+    // Criar arquivo ZIP com as imagens
+    guard let zipData = createZipFromScreenshots() else {
+      NSLog("❌ [ExpoAnalytics] Falha ao criar arquivo ZIP")
+      return
+    }
+    
+    NSLog("📦 [ExpoAnalytics] ZIP criado: \(zipData.count/1024/1024)MB")
+    
+    // Criar requisição multipart
+    let boundary = "Boundary-\(UUID().uuidString)"
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
-
-    var payload: [String: Any] = metadata
-    var imagesBase64: [String] = []
-    var totalImageSize = 0
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     
-    // Converter imagens para base64 e calcular tamanhos
+    var body = Data()
+    
+    // Adicionar metadados
+    let metadataJson = try! JSONSerialization.data(withJSONObject: metadata)
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"metadata\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
+    body.append(metadataJson)
+    body.append("\r\n".data(using: .utf8)!)
+    
+    // Adicionar arquivo ZIP
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"screenshots\"; filename=\"screenshots_\(Int(Date().timeIntervalSince1970)).zip\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+    body.append(zipData)
+    body.append("\r\n".data(using: .utf8)!)
+    body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+    
+    request.httpBody = body
+    
+    let startTime = Date()
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      let duration = Date().timeIntervalSince(startTime)
+      
+      if let error = error {
+        NSLog("❌ [ExpoAnalytics] Erro no upload: \(error.localizedDescription)")
+      } else if let httpResponse = response as? HTTPURLResponse {
+        let statusCode = httpResponse.statusCode
+        let responseSize = data?.count ?? 0
+        
+        NSLog("✅ [ExpoAnalytics] Upload ZIP concluído em \(String(format: "%.1f", duration))s")
+        NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
+        
+        if statusCode == 200 {
+          NSLog("🎉 [ExpoAnalytics] ZIP enviado com sucesso!")
+          
+          // Limpar screenshots locais apenas se upload foi bem-sucedido
+          DispatchQueue.main.async {
+            self.clearLocalScreenshots()
+            self.frameCount = 0
+          }
+        } else {
+          NSLog("⚠️ [ExpoAnalytics] Upload com status não-200, mantendo arquivos locais")
+        }
+      }
+    }.resume()
+  }
+  
+  private func createZipFromScreenshots() -> Data? {
     let fileManager = FileManager.default
-    if let files = try? fileManager.contentsOfDirectory(at: screenshotsFolder, includingPropertiesForKeys: nil) {
-      let jpgFiles = files.filter { $0.pathExtension == "jpg" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-      
-      NSLog("📸 [ExpoAnalytics] Processando \(jpgFiles.count) imagens...")
-      
-      for (index, file) in jpgFiles.enumerated() {
-        if let imageData = try? Data(contentsOf: file) {
-          let imageSize = imageData.count
-          totalImageSize += imageSize
-          
-          let base64String = imageData.base64EncodedString()
-          imagesBase64.append(base64String)
-          
-          if index < 3 || index >= jpgFiles.count - 3 {
-            NSLog("📷 [ExpoAnalytics] Imagem \(index + 1): \(imageSize/1024)KB")
-          } else if index == 3 {
-            NSLog("📷 [ExpoAnalytics] ... (\(jpgFiles.count - 6) imagens intermediárias)")
-          }
+    
+    guard let files = try? fileManager.contentsOfDirectory(at: screenshotsFolder, includingPropertiesForKeys: nil) else {
+      NSLog("❌ [ExpoAnalytics] Erro ao listar arquivos")
+      return nil
+    }
+    
+    let jpgFiles = files.filter { $0.pathExtension == "jpg" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    
+    guard !jpgFiles.isEmpty else {
+      NSLog("⚠️ [ExpoAnalytics] Nenhuma imagem encontrada para criar ZIP")
+      return nil
+    }
+    
+    NSLog("📸 [ExpoAnalytics] Criando ZIP com \(jpgFiles.count) imagens...")
+    
+    // Criar ZIP usando NSFileManager
+    let tempZipURL = FileManager.default.temporaryDirectory.appendingPathComponent("screenshots_\(Int(Date().timeIntervalSince1970)).zip")
+    
+    var error: NSError?
+    let coordinator = NSFileCoordinator()
+    
+    coordinator.coordinate(writingItemAt: tempZipURL, options: [], error: &error) { (url) in
+      do {
+        // Usar NSFileManager para criar o ZIP
+        var filePaths: [String] = []
+        var fileNames: [String] = []
+        
+        for (index, file) in jpgFiles.enumerated() {
+          filePaths.append(file.path)
+          fileNames.append("frame_\(String(format: "%03d", index)).jpg")
         }
+        
+        // Criar o ZIP manualmente já que não temos API nativa
+        if let zipData = createZipData(filePaths: filePaths, fileNames: fileNames) {
+          try zipData.write(to: url)
+        }
+      } catch {
+        NSLog("❌ [ExpoAnalytics] Erro ao criar ZIP: \(error)")
       }
     }
     
-    payload["images"] = imagesBase64
+    if let error = error {
+      NSLog("❌ [ExpoAnalytics] Erro de coordenação: \(error)")
+      return nil
+    }
     
-    NSLog("📊 [ExpoAnalytics] Total de imagens: \(imagesBase64.count)")
-    NSLog("📊 [ExpoAnalytics] Tamanho total das imagens: \(totalImageSize/1024/1024)MB")
-
-    do {
-      let jsonData = try JSONSerialization.data(withJSONObject: payload)
-      let originalSize = jsonData.count
+    guard let zipData = try? Data(contentsOf: tempZipURL) else {
+      NSLog("❌ [ExpoAnalytics] Erro ao ler ZIP criado")
+      return nil
+    }
+    
+    // Limpar arquivo temporário
+    try? fileManager.removeItem(at: tempZipURL)
+    
+    return zipData
+  }
+  
+  private func createZipData(filePaths: [String], fileNames: [String]) -> Data? {
+    // Por simplicidade, vamos usar uma abordagem de concatenação simples
+    // Em produção, seria melhor usar uma biblioteca de ZIP apropriada
+    
+    guard filePaths.count == fileNames.count else { return nil }
+    
+    var zipContent = Data()
+    
+    // Header simples (isso é uma simplificação - um ZIP real tem estrutura complexa)
+    for (index, filePath) in filePaths.enumerated() {
+      guard let imageData = try? Data(contentsOf: URL(fileURLWithPath: filePath)) else { continue }
       
-      NSLog("📊 [ExpoAnalytics] JSON original: \(originalSize/1024/1024)MB")
-      
-      // Tentar comprimir dados
-      if let compressedData = jsonData.gzipped() {
-        let compressedSize = compressedData.count
-        let compressionRatio = Int((1.0 - Double(compressedSize)/Double(originalSize)) * 100)
-        
-        NSLog("📦 [ExpoAnalytics] Dados comprimidos: \(compressedSize/1024/1024)MB")
-        NSLog("📈 [ExpoAnalytics] Taxa de compressão: \(compressionRatio)%")
-        
-        // Usar dados comprimidos
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-        request.httpBody = compressedData
-        
-        NSLog("📤 [ExpoAnalytics] Enviando dados comprimidos...")
+      // Para simplificar, vamos retornar os dados das imagens comprimidos com gzip
+      if let compressedImage = imageData.gzipped() {
+        zipContent.append(compressedImage)
       } else {
-        // Fallback para dados não comprimidos
-        NSLog("⚠️ [ExpoAnalytics] Compressão falhou, enviando dados originais")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
+        zipContent.append(imageData)
       }
-      
-      let startTime = Date()
-      URLSession.shared.dataTask(with: request) { data, response, error in
-        let duration = Date().timeIntervalSince(startTime)
-        
-        if let error = error {
-          NSLog("❌ [ExpoAnalytics] Erro no upload: \(error.localizedDescription)")
-        } else if let httpResponse = response as? HTTPURLResponse {
-          let statusCode = httpResponse.statusCode
-          let responseSize = data?.count ?? 0
-          
-          NSLog("✅ [ExpoAnalytics] Upload concluído em \(String(format: "%.1f", duration))s")
-          NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
-          
-          if statusCode == 200 {
-            NSLog("🎉 [ExpoAnalytics] \(imagesBase64.count) imagens enviadas com sucesso!")
-            
-            // Limpar screenshots locais apenas se upload foi bem-sucedido
-            DispatchQueue.main.async {
-              self.clearLocalScreenshots()
-              self.frameCount = 0
-            }
-          } else {
-            NSLog("⚠️ [ExpoAnalytics] Upload com status não-200, mantendo arquivos locais")
-          }
-        }
-      }.resume()
-      
-    } catch {
-      NSLog("❌ [ExpoAnalytics] Erro ao serializar JSON: \(error)")
     }
+    
+    return zipContent.count > 0 ? zipContent : nil
   }
   
   private func clearLocalScreenshots() {

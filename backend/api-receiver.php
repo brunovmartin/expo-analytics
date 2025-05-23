@@ -55,6 +55,10 @@ switch (true) {
         handleUpload($data);
         break;
     
+    case $uri === '/upload-zip':
+        handleUploadZip();
+        break;
+    
     case $uri === '/track':
         handleTrack($data);
         break;
@@ -592,6 +596,212 @@ function handleGetAppConfig() {
     
     saveLog("Config requested for app: $bundleId");
     jsonResponse(['success' => true, 'config' => $appData['config']]);
+}
+
+// Handler para upload de screenshots em ZIP
+function handleUploadZip() {
+    global $baseDir;
+    
+    saveLog("📦 Processando upload ZIP...");
+    
+    // Verificar se é um upload multipart
+    if (!isset($_FILES['screenshots']) || !isset($_POST['metadata'])) {
+        saveLog("❌ Dados ZIP inválidos ou ausentes");
+        jsonResponse(['error' => 'Missing ZIP file or metadata'], 400);
+    }
+    
+    $uploadedFile = $_FILES['screenshots'];
+    $metadata = json_decode($_POST['metadata'], true);
+    
+    if (!$metadata || !isset($metadata['userId'])) {
+        saveLog("❌ Metadados inválidos ou userId ausente");
+        jsonResponse(['error' => 'Invalid metadata'], 400);
+    }
+    
+    $userId = $metadata['userId'];
+    $timestamp = isset($metadata['timestamp']) ? (int)$metadata['timestamp'] : time();
+    $date = date('Y-m-d', $timestamp);
+    
+    saveLog("📥 ZIP recebido para usuário $userId - Tamanho: " . formatBytes($uploadedFile['size']));
+    
+    // Criar diretórios
+    $userDir = $baseDir . '/videos/' . $userId . '/' . $date;
+    $tempDir = $baseDir . '/temp/' . $userId . '_' . $timestamp;
+    ensureDir($userDir);
+    ensureDir($tempDir);
+    
+    // Mover arquivo ZIP para pasta temporária
+    $zipPath = $tempDir . '/screenshots.zip';
+    if (!move_uploaded_file($uploadedFile['tmp_name'], $zipPath)) {
+        saveLog("❌ Erro ao mover arquivo ZIP");
+        jsonResponse(['error' => 'Failed to process ZIP file'], 500);
+    }
+    
+    // Extrair imagens do ZIP
+    $extractedPath = $tempDir . '/extracted';
+    ensureDir($extractedPath);
+    
+    $imageCount = extractZipImages($zipPath, $extractedPath);
+    
+    if ($imageCount === 0) {
+        saveLog("❌ Nenhuma imagem extraída do ZIP");
+        cleanupTempDir($tempDir);
+        jsonResponse(['error' => 'No images found in ZIP'], 400);
+    }
+    
+    saveLog("📸 $imageCount imagens extraídas do ZIP");
+    
+    // Gerar MP4 a partir das imagens
+    $videoFileName = "video_" . $timestamp . ".mp4";
+    $videoPath = $userDir . '/' . $videoFileName;
+    
+    $success = generateMP4FromImages($extractedPath, $videoPath, $metadata);
+    
+    if ($success) {
+        // Salvar metadados do vídeo
+        $videoMetadata = [
+            'userId' => $userId,
+            'timestamp' => $timestamp,
+            'userData' => $metadata['userData'] ?? [],
+            'geo' => $metadata['geo'] ?? [],
+            'receivedAt' => time(),
+            'imageCount' => $imageCount,
+            'videoFile' => $videoFileName,
+            'originalZipSize' => $uploadedFile['size'],
+            'videoSize' => file_exists($videoPath) ? filesize($videoPath) : 0,
+            'compressionRatio' => file_exists($videoPath) ? 
+                round((1 - filesize($videoPath) / $uploadedFile['size']) * 100, 1) : 0
+        ];
+        
+        $metadataFile = $userDir . '/metadata_' . $timestamp . '.json';
+        file_put_contents($metadataFile, json_encode($videoMetadata, JSON_PRETTY_PRINT));
+        
+        saveLog("✅ MP4 gerado com sucesso: " . formatBytes(filesize($videoPath)));
+        saveLog("📊 Taxa de compressão: {$videoMetadata['compressionRatio']}%");
+        
+        // Limpar arquivos temporários (ZIP e imagens extraídas)
+        cleanupTempDir($tempDir);
+        
+        jsonResponse([
+            'success' => true,
+            'videoFile' => $videoFileName,
+            'imageCount' => $imageCount,
+            'originalSize' => formatBytes($uploadedFile['size']),
+            'videoSize' => formatBytes($videoMetadata['videoSize']),
+            'compressionRatio' => $videoMetadata['compressionRatio'] . '%'
+        ]);
+    } else {
+        saveLog("❌ Erro ao gerar MP4");
+        cleanupTempDir($tempDir);
+        jsonResponse(['error' => 'Failed to generate MP4'], 500);
+    }
+}
+
+// Função para extrair imagens do ZIP
+function extractZipImages($zipPath, $extractPath) {
+    $imageCount = 0;
+    
+    // Tentar usar ZipArchive se disponível
+    if (class_exists('ZipArchive')) {
+        $zip = new ZipArchive;
+        if ($zip->open($zipPath) === TRUE) {
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $filename = $zip->getNameIndex($i);
+                if (preg_match('/\.(jpg|jpeg|png)$/i', $filename)) {
+                    $content = $zip->getFromIndex($i);
+                    if ($content !== false) {
+                        $newName = sprintf('frame_%03d.jpg', $imageCount);
+                        file_put_contents($extractPath . '/' . $newName, $content);
+                        $imageCount++;
+                    }
+                }
+            }
+            $zip->close();
+            saveLog("📦 ZipArchive: $imageCount imagens extraídas");
+        } else {
+            saveLog("❌ Erro ao abrir ZIP com ZipArchive");
+        }
+    }
+    
+    // Fallback: tentar comando unzip se ZipArchive falhou
+    if ($imageCount === 0 && file_exists($zipPath)) {
+        $cmd = "cd " . escapeshellarg($extractPath) . " && unzip -j " . escapeshellarg($zipPath) . " '*.jpg' '*.jpeg' '*.png' 2>/dev/null";
+        exec($cmd, $output, $returnCode);
+        
+        if ($returnCode === 0) {
+            $files = glob($extractPath . '/*.{jpg,jpeg,png}', GLOB_BRACE);
+            $imageCount = count($files);
+            
+            // Renomear arquivos para ordem sequencial
+            foreach ($files as $index => $file) {
+                $newName = sprintf('frame_%03d.jpg', $index);
+                rename($file, $extractPath . '/' . $newName);
+            }
+            
+            saveLog("📦 Comando unzip: $imageCount imagens extraídas");
+        } else {
+            saveLog("❌ Erro ao extrair ZIP com comando unzip");
+        }
+    }
+    
+    return $imageCount;
+}
+
+// Função para gerar MP4 a partir das imagens
+function generateMP4FromImages($imagesPath, $outputVideoPath, $metadata) {
+    // Verificar se FFmpeg está disponível
+    exec('which ffmpeg 2>/dev/null', $output, $returnCode);
+    if ($returnCode !== 0) {
+        // Tentar caminhos comuns do FFmpeg
+        $ffmpegPaths = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'];
+        $ffmpegCmd = null;
+        
+        foreach ($ffmpegPaths as $path) {
+            if (file_exists($path)) {
+                $ffmpegCmd = $path;
+                break;
+            }
+        }
+        
+        if (!$ffmpegCmd) {
+            saveLog("❌ FFmpeg não encontrado no sistema");
+            return false;
+        }
+    } else {
+        $ffmpegCmd = 'ffmpeg';
+    }
+    
+    // Detectar framerate dos metadados ou usar padrão
+    $framerate = isset($metadata['userData']['framerate']) ? 
+        max(1, min($metadata['userData']['framerate'], 30)) : 10;
+    
+    // Comando FFmpeg otimizado para compressão
+    $cmd = sprintf(
+        '%s -y -framerate %d -i %s -c:v libx264 -preset faster -crf 28 -vf "scale=480:960:force_original_aspect_ratio=decrease,pad=480:960:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -movflags +faststart %s 2>&1',
+        escapeshellarg($ffmpegCmd),
+        $framerate,
+        escapeshellarg($imagesPath . '/frame_%03d.jpg'),
+        escapeshellarg($outputVideoPath)
+    );
+    
+    saveLog("🎬 Executando FFmpeg: framerate=$framerate");
+    exec($cmd, $output, $returnCode);
+    
+    if ($returnCode === 0 && file_exists($outputVideoPath)) {
+        saveLog("✅ MP4 gerado com sucesso");
+        return true;
+    } else {
+        saveLog("❌ Erro FFmpeg (código $returnCode): " . implode("\n", $output));
+        return false;
+    }
+}
+
+// Função para limpar diretório temporário
+function cleanupTempDir($tempDir) {
+    if (is_dir($tempDir)) {
+        deleteDir($tempDir);
+        saveLog("🧹 Arquivos temporários removidos: $tempDir");
+    }
 }
 
 saveLog("Request completed");
