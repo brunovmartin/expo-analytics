@@ -501,12 +501,25 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     self.isCapturing = true
     self.lastCaptureTime = 0
     
-    // Usar CADisplayLink com framerate baixo para economia de energia
+    // 🚀 OTIMIZAÇÃO: DisplayLink adaptativo baseado no framerate
     self.displayLink = CADisplayLink(target: self, selector: #selector(self.optimizedCaptureFrame))
-    self.displayLink?.preferredFramesPerSecond = 60 // DisplayLink a 60fps, mas filtramos internamente
+    
+    // Calcular framerate inteligente do DisplayLink
+    let idealDisplayFramerate: Int
+    if self.framerate <= 5 {
+        idealDisplayFramerate = 15  // 3x para suavidade
+    } else if self.framerate <= 15 {
+        idealDisplayFramerate = self.framerate * 2  // 2x para suavidade
+    } else {
+        idealDisplayFramerate = min(self.framerate + 10, 60)  // Máximo 60fps
+    }
+    
+    self.displayLink?.preferredFramesPerSecond = idealDisplayFramerate
     self.displayLink?.add(to: .main, forMode: .common)
     
-    NSLog("🎬 [ExpoAnalytics] Captura otimizada iniciada - \(self.framerate) fps efetivo")
+    NSLog("🎬 [ExpoAnalytics] Captura OTIMIZADA iniciada:")
+    NSLog("   Target: \(self.framerate) fps")
+    NSLog("   DisplayLink: \(idealDisplayFramerate) fps")
   }
   
   private func stopCapture() {
@@ -539,59 +552,59 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
 
     DispatchQueue.main.sync {
-      // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
-      let allWindows = windowScene.windows.filter { $0.isHidden == false }
-      guard !allWindows.isEmpty else { return }
-      
-      // Log de debug para mostrar janelas being capturadas
-      if frameCount % 60 == 0 { // Log apenas ocasionalmente para não sobrecarregar
+        // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+        let allWindows = windowScene.windows.filter { $0.isHidden == false }
+        guard !allWindows.isEmpty else { return }
+        
+        // Log de debug para mostrar janelas being capturadas
+        if frameCount % 60 == 0 { // Log apenas ocasionalmente para não sobrecarregar
         NSLog("🔍 [ExpoAnalytics] Capturando \(allWindows.count) janelas:")
         for (index, window) in allWindows.enumerated() {
-          NSLog("   \(index + 1). \(window.analyticsDebugDescription)")
+            NSLog("   \(index + 1). \(window.analyticsDebugDescription)")
         }
-      }
-      
-      // Pegar a janela principal para obter as dimensões
-      let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
-      let originalBounds = mainWindow.bounds
+        }
+        
+        // Pegar a janela principal para obter as dimensões
+        let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
+        let originalBounds = mainWindow.bounds
     
-      // Calcular escala para reduzir a resolução desde o início
-      let targetSize = self.screenSize
-      let scaleX = targetSize.width / originalBounds.width
-      let scaleY = targetSize.height / originalBounds.height
+        // Calcular escala para reduzir a resolução desde o início
+        let targetSize = self.screenSize
+        let scaleX = targetSize.width / originalBounds.width
+        let scaleY = targetSize.height / originalBounds.height
     
-      // Criar contexto com o tamanho alvo já reduzido
-      UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0) // Scale fixo 1.0
-      
-      guard let context = UIGraphicsGetCurrentContext() else {
+        // Criar contexto com o tamanho alvo já reduzido
+        UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0) // Scale fixo 1.0
+        
+        guard let context = UIGraphicsGetCurrentContext() else {
         NSLog("❌ [ExpoAnalytics] Erro ao criar contexto gráfico")
         return
-      }
-      
-      // Aplicar transformação para redimensionar durante a captura
-      context.scaleBy(x: scaleX, y: scaleY)
-      
-      // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
-      let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
-      
-      for window in sortedWindows {
+        }
+        
+        // Aplicar transformação para redimensionar durante a captura
+        context.scaleBy(x: scaleX, y: scaleY)
+        
+        // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
+        let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+        
+        for window in sortedWindows {
         window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
-      }
-      
-      let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
-      UIGraphicsEndImageContext()
+        }
+        
+        let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
 
-      guard let image = capturedImage else { 
+        guard let image = capturedImage else { 
         NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
         return 
-      }
+        }
     
-      // Processar imagem em background
-      captureQueue.async { [weak self] in
+        // Processar imagem em background
+        captureQueue.async { [weak self] in
         self?.processAndSaveImage(image)
-      }
+        }
     }
-  }
+    }
   
   private func processAndSaveImage(_ image: UIImage) {
     // Comprimir com qualidade ajustada baseada no framerate
