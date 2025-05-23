@@ -55,3 +55,9 @@ yarn-error.log
 
 # Expo
 .expo/*
+
+# Analytics data (local development - agora dentro de backend/)
+backend/analytics-data/
+
+# Backend está organizado na pasta backend/ (não ignorar a pasta, apenas os dados)
+# backend/ - pasta mantida no repositório

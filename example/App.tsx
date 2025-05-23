@@ -1,73 +1,117 @@
-import { useEvent } from 'expo';
-import ExpoAnalytics, { ExpoAnalyticsView } from 'expo-analytics';
-import { Button, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import ExpoAnalytics, { StartOptions } from 'expo-analytics';
+import { useEffect, useState } from 'react';
+import { Text, View, Button, StyleSheet, Alert } from 'react-native';
 
 export default function App() {
-  const onChangePayload = useEvent(ExpoAnalytics, 'onChange');
+    const [isRecording, setIsRecording] = useState(false);
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.container}>
-        <Text style={styles.header}>Module API Example</Text>
-        <Group name="Constants">
-          <Text>{ExpoAnalytics.PI}</Text>
-        </Group>
-        <Group name="Functions">
-          <Text>{ExpoAnalytics.hello()}</Text>
-        </Group>
-        <Group name="Async functions">
-          <Button
-            title="Set value"
-            onPress={async () => {
-              await ExpoAnalytics.setValueAsync('Hello from JS!');
-            }}
-          />
-        </Group>
-        <Group name="Events">
-          <Text>{onChangePayload?.value}</Text>
-        </Group>
-        <Group name="Views">
-          <ExpoAnalyticsView
-            url="https://www.example.com"
-            onLoad={({ nativeEvent: { url } }) => console.log(`Loaded: ${url}`)}
-            style={styles.view}
-          />
-        </Group>
-      </ScrollView>
-    </SafeAreaView>
-  );
+    const startAnalytics = async () => {
+        try {
+            const options: StartOptions = {
+                apiHost: 'http://localhost:8080',
+                userId: 'user123',
+                framerate: 30,
+                userData: {
+                    appVersion: '1.0.0',
+                    userType: 'premium'
+                }
+            };
+
+            await ExpoAnalytics.start(options);
+            setIsRecording(true);
+            Alert.alert('Sucesso', 'Analytics iniciado com sucesso!');
+        } catch (error) {
+            Alert.alert('Erro', 'Falha ao iniciar analytics: ' + error);
+        }
+    };
+
+    const stopAnalytics = async () => {
+        try {
+            await ExpoAnalytics.stop();
+            setIsRecording(false);
+            Alert.alert('Sucesso', 'Analytics parado com sucesso!');
+        } catch (error) {
+            Alert.alert('Erro', 'Falha ao parar analytics: ' + error);
+        }
+    };
+
+    const trackCustomEvent = async () => {
+        try {
+            await ExpoAnalytics.trackEvent('button_pressed', 'track_event_button');
+            Alert.alert('Sucesso', 'Evento rastreado com sucesso!');
+        } catch (error) {
+            Alert.alert('Erro', 'Falha ao rastrear evento: ' + error);
+        }
+    };
+
+    const updateUserInfo = async () => {
+        try {
+            await ExpoAnalytics.updateUserInfo({
+                lastActivity: new Date().toISOString(),
+                sessionCount: 1
+            });
+            Alert.alert('Sucesso', 'Informações do usuário atualizadas!');
+        } catch (error) {
+            Alert.alert('Erro', 'Falha ao atualizar informações: ' + error);
+        }
+    };
+
+    return (
+        <View style={styles.container}>
+            <Text style={styles.title}>Expo Analytics Demo</Text>
+
+            <Text style={styles.status}>
+                Status: {isRecording ? 'Gravando' : 'Parado'}
+            </Text>
+
+            <View style={styles.buttonContainer}>
+                <Button
+                    title={isRecording ? "Parar Analytics" : "Iniciar Analytics"}
+                    onPress={isRecording ? stopAnalytics : startAnalytics}
+                    color={isRecording ? '#ff4444' : '#4CAF50'}
+                />
+            </View>
+
+            <View style={styles.buttonContainer}>
+                <Button
+                    title="Rastrear Evento"
+                    onPress={trackCustomEvent}
+                    disabled={!isRecording}
+                />
+            </View>
+
+            <View style={styles.buttonContainer}>
+                <Button
+                    title="Atualizar User Info"
+                    onPress={updateUserInfo}
+                    disabled={!isRecording}
+                />
+            </View>
+        </View>
+    );
 }
 
-function Group(props: { name: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.group}>
-      <Text style={styles.groupHeader}>{props.name}</Text>
-      {props.children}
-    </View>
-  );
-}
-
-const styles = {
-  header: {
-    fontSize: 30,
-    margin: 20,
-  },
-  groupHeader: {
-    fontSize: 20,
-    marginBottom: 20,
-  },
-  group: {
-    margin: 20,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 20,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#eee',
-  },
-  view: {
-    flex: 1,
-    height: 200,
-  },
-};
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+        backgroundColor: '#f5f5f5',
+    },
+    title: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        marginBottom: 20,
+        color: '#333',
+    },
+    status: {
+        fontSize: 18,
+        marginBottom: 30,
+        color: '#666',
+    },
+    buttonContainer: {
+        marginVertical: 10,
+        minWidth: 200,
+    },
+});

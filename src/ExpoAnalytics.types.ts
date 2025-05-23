@@ -1,19 +1,44 @@
 import type { StyleProp, ViewStyle } from 'react-native';
 
-export type OnLoadEventPayload = {
-  url: string;
+export type UserData = Record<string, any>;
+
+export type GeoData = {
+  ip?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  country_name?: string;
+  latitude?: number;
+  longitude?: number;
+  [key: string]: any;
+};
+
+export type AnalyticsEventPayload = {
+  event: string;
+  value: string;
+  timestamp: number;
+  userId: string;
+  userData: UserData;
+  geo: GeoData;
 };
 
 export type ExpoAnalyticsModuleEvents = {
-  onChange: (params: ChangeEventPayload) => void;
+  onScreenshotCaptured?: (params: ScreenshotCapturedPayload) => void;
+  onAnalyticsError?: (params: AnalyticsErrorPayload) => void;
 };
 
-export type ChangeEventPayload = {
-  value: string;
+export type ScreenshotCapturedPayload = {
+  frameCount: number;
+  timestamp: number;
+};
+
+export type AnalyticsErrorPayload = {
+  error: string;
+  timestamp: number;
 };
 
 export type ExpoAnalyticsViewProps = {
-  url: string;
-  onLoad: (event: { nativeEvent: OnLoadEventPayload }) => void;
+  enabled?: boolean;
+  onAnalyticsData?: (event: { nativeEvent: AnalyticsEventPayload }) => void;
   style?: StyleProp<ViewStyle>;
 };
