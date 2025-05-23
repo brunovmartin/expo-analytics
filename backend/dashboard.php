@@ -967,8 +967,44 @@ $screenSizeOptions = [
                                     <?php endif; ?>
                                 </div>
 
-                                <!-- Coluna Direita: Abas de Conteúdo -->
-                                <div class="user-tabs-container">
+                                <!-- Coluna Direita: Botão para Abas de Conteúdo -->
+                                <div class="user-tabs-summary">
+                                    <button class="open-tabs-overlay-btn" onclick="openTabsOverlay()">
+                                        <div class="tabs-summary-content">
+                                            <h3><i class="fas fa-chart-line"></i> Atividades do Usuário</h3>
+                                            <div class="tabs-summary-stats">
+                                                <div class="summary-stat">
+                                                    <i class="fas fa-history"></i>
+                                                    <span><?= $userData['totalEvents'] ?> Eventos</span>
+                                                </div>
+                                                <div class="summary-stat">
+                                                    <i class="fas fa-film"></i>
+                                                    <span><?= $userData['totalVideos'] ?> Vídeos</span>
+                                                </div>
+                                                <div class="summary-stat">
+                                                    <i class="fas fa-camera"></i>
+                                                    <span><?= count($userData['allSessions']) ?> Sessões</span>
+                                                </div>
+                                            </div>
+                                            <div class="open-overlay-hint">
+                                                <i class="fas fa-expand"></i>
+                                                Clique para visualizar detalhes
+                                            </div>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Overlay das Abas de Conteúdo -->
+                            <div id="tabsOverlay" class="tabs-overlay">
+                                <div class="tabs-overlay-content">
+                                    <div class="tabs-overlay-header">
+                                        <h2><i class="fas fa-user-cog"></i> Atividades - <?= htmlspecialchars($selectedUser) ?></h2>
+                                        <button class="close-overlay-btn" onclick="closeTabsOverlay()">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                    
                                     <div class="tabs-container">
                                         <div class="tabs-header">
                                             <button class="tab-btn active" onclick="showTab('timeline')">
@@ -982,60 +1018,53 @@ $screenSizeOptions = [
                                             </button>
                                         </div>
                                         
-                                        <!-- Aba Linha do Tempo -->
+                                        <!-- Aba Linha do Tempo - VERTICAL -->
                                         <div id="timeline-tab" class="tab-content active">
                                             <h3><i class="fas fa-history"></i> Linha do Tempo de Eventos</h3>
                                             <?php if (!empty($userData['timeline'])): ?>
-                                            <div class="timeline-container">
+                                            <div class="timeline-vertical-container">
                                                 <?php foreach ($userData['timeline'] as $date => $dayEvents): ?>
-                                                <div class="timeline-day">
-                                                    <div class="timeline-date">
-                                                        <i class="fas fa-calendar-day"></i>
-                                                        <?= date('d/m/Y', strtotime($date)) ?>
-                                                        <span class="events-count"><?= count($dayEvents) ?> eventos</span>
-                                                    </div>
-                                                    
-                                                    <div class="timeline-horizontal">
-                                                        <div class="timeline-line"></div>
-                                                        <?php foreach ($dayEvents as $index => $event): ?>
-                                                        <div class="timeline-event" style="left: <?= ($index / count($dayEvents)) * 100 ?>%">
-                                                            <div class="event-marker">
-                                                                <i class="fas fa-circle"></i>
+                                                    <?php foreach ($dayEvents as $event): ?>
+                                                    <div class="timeline-vertical-event">
+                                                        <div class="event-time-info">
+                                                            <div class="event-date">
+                                                                <?= date('d/m/Y', $event['timestamp']) ?>
                                                             </div>
-                                                            <div class="event-popup">
-                                                                <div class="event-time">
-                                                                    <i class="fas fa-clock"></i>
-                                                                    <?= $event['time'] ?>
-                                                                </div>
-                                                                <div class="event-name">
-                                                                    <i class="fas fa-tag"></i>
-                                                                    <?= htmlspecialchars($event['event']) ?>
-                                                                </div>
-                                                                <?php if (!empty($event['value'])): ?>
-                                                                <div class="event-value">
-                                                                    <i class="fas fa-info-circle"></i>
-                                                                    <?= htmlspecialchars($event['value']) ?>
-                                                                </div>
-                                                                <?php endif; ?>
-                                                                <?php if (!empty($event['geo']) && !empty($event['geo']['flag']) && (!isset($event['geo']['error']) || $event['geo']['country'] !== 'Unknown')): ?>
-                                                                <div class="event-location">
-                                                                    <i class="fas fa-globe"></i>
-                                                                    <?= $event['geo']['flag'] ?> 
-                                                                    <?php if (!empty($event['geo']['country']) && $event['geo']['country'] !== 'Unknown'): ?>
-                                                                        <?= htmlspecialchars($event['geo']['country']) ?>
-                                                                        <?php if (!empty($event['geo']['city']) && $event['geo']['city'] !== 'Unknown'): ?>
-                                                                            , <?= htmlspecialchars($event['geo']['city']) ?>
-                                                                        <?php endif; ?>
-                                                                    <?php else: ?>
-                                                                        <?= htmlspecialchars($event['geo']['city'] ?? 'Localização indisponível') ?>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                                <?php endif; ?>
+                                                            <div class="event-time">
+                                                                <?= date('H:i:s', $event['timestamp']) ?>
                                                             </div>
                                                         </div>
-                                                        <?php endforeach; ?>
+                                                        <div class="event-marker-vertical">
+                                                            <i class="fas fa-circle"></i>
+                                                        </div>
+                                                        <div class="event-content">
+                                                            <div class="event-name">
+                                                                <i class="fas fa-tag"></i>
+                                                                <?= htmlspecialchars($event['event']) ?>
+                                                            </div>
+                                                            <?php if (!empty($event['value'])): ?>
+                                                            <div class="event-value">
+                                                                <i class="fas fa-info-circle"></i>
+                                                                <?= htmlspecialchars($event['value']) ?>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                            <?php if (!empty($event['geo']) && !empty($event['geo']['flag']) && (!isset($event['geo']['error']) || $event['geo']['country'] !== 'Unknown')): ?>
+                                                            <div class="event-location">
+                                                                <i class="fas fa-globe"></i>
+                                                                <?= $event['geo']['flag'] ?> 
+                                                                <?php if (!empty($event['geo']['country']) && $event['geo']['country'] !== 'Unknown'): ?>
+                                                                    <?= htmlspecialchars($event['geo']['country']) ?>
+                                                                    <?php if (!empty($event['geo']['city']) && $event['geo']['city'] !== 'Unknown'): ?>
+                                                                        , <?= htmlspecialchars($event['geo']['city']) ?>
+                                                                    <?php endif; ?>
+                                                                <?php else: ?>
+                                                                    <?= htmlspecialchars($event['geo']['city'] ?? 'Localização indisponível') ?>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                        </div>
                                                     </div>
-                                                </div>
+                                                    <?php endforeach; ?>
                                                 <?php endforeach; ?>
                                             </div>
                                             <?php else: ?>
@@ -1047,23 +1076,23 @@ $screenSizeOptions = [
                                             <?php endif; ?>
                                         </div>
                                         
-                                        <!-- Aba Vídeos -->
+                                        <!-- Aba Vídeos - BOXES MENORES -->
                                         <div id="videos-tab" class="tab-content">
                                             <h3><i class="fas fa-film"></i> Sessões Gravadas</h3>
                                             <?php if (!empty($userData['allVideos'])): ?>
-                                            <div class="videos-grid">
+                                            <div class="videos-grid-compact">
                                                 <?php foreach ($userData['allVideos'] as $video): ?>
-                                                <div class="video-card">
-                                                    <div class="video-thumbnail">
-                                                        <video preload="none" poster="">
+                                                <div class="video-card-compact">
+                                                    <div class="video-thumbnail-compact">
+                                                        <video preload="metadata" muted onloadedmetadata="seekToMidpoint(this)">
                                                             <source src="<?= htmlspecialchars($video['path']) ?>" type="video/mp4">
                                                         </video>
-                                                        <div class="video-overlay">
-                                                            <button class="play-video-btn" onclick="playVideo('<?= htmlspecialchars($video['path']) ?>')">
+                                                        <div class="video-overlay-compact">
+                                                            <button class="play-video-btn-compact" onclick="playVideo('<?= htmlspecialchars($video['path']) ?>')">
                                                                 <i class="fas fa-play"></i>
                                                             </button>
                                                         </div>
-                                                        <div class="video-duration">
+                                                        <div class="video-duration-compact">
                                                             <i class="fas fa-clock"></i>
                                                             <?php 
                                                             if ($video['sessionDuration'] > 0) {
@@ -1074,35 +1103,12 @@ $screenSizeOptions = [
                                                             }
                                                             ?>
                                                         </div>
-                                                        <?php if ($video['sessionId']): ?>
-                                                        <div class="session-id">
-                                                            <i class="fas fa-tag"></i>
-                                                            <?= substr($video['sessionId'], 0, 8) ?>...
-                                                        </div>
-                                                        <?php endif; ?>
                                                     </div>
-                                                    <div class="video-info">
-                                                        <h4><?= date('d/m/Y H:i', $video['timestamp']) ?></h4>
+                                                    <div class="video-info-compact">
+                                                        <h4><?= date('d/m H:i', $video['timestamp']) ?></h4>
                                                         <p><i class="fas fa-hdd"></i> <?= number_format($video['size'] / 1024 / 1024, 1) ?> MB</p>
-                                                        
                                                         <?php if ($video['sessionDuration'] > 0): ?>
-                                                        <p><i class="fas fa-stopwatch"></i> <?= number_format($video['sessionDuration'], 1) ?>s sessão</p>
-                                                        <?php endif; ?>
-                                                        
-                                                        <?php if ($video['frameCount'] > 0): ?>
-                                                        <p><i class="fas fa-images"></i> <?= $video['frameCount'] ?> frames (<?= $video['actualFrames'] ?> real)</p>
-                                                        <?php endif; ?>
-                                                        
-                                                        <?php if ($video['effectiveFPS'] > 0): ?>
-                                                        <p><i class="fas fa-tachometer-alt"></i> <?= $video['effectiveFPS'] ?> FPS efetivo</p>
-                                                        <?php endif; ?>
-                                                        
-                                                        <?php if ($video['compressionRatio'] > 0): ?>
-                                                        <p><i class="fas fa-compress"></i> <?= $video['compressionRatio'] ?>% compressão</p>
-                                                        <?php endif; ?>
-                                                        
-                                                        <?php if ($video['platform'] !== 'unknown'): ?>
-                                                        <p><i class="fas fa-mobile-alt"></i> <?= ucfirst($video['platform']) ?> <?= $video['appVersion'] ?></p>
+                                                        <p><i class="fas fa-stopwatch"></i> <?= number_format($video['sessionDuration'], 1) ?>s</p>
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
@@ -1160,7 +1166,6 @@ $screenSizeOptions = [
                                     </div>
                                 </div>
                             </div>
-
                             <?php else: ?>
                             <div class="empty-state">
                                 <i class="fas fa-hand-point-left"></i>
@@ -1309,6 +1314,57 @@ $screenSizeOptions = [
 
     <script src="assets/script.js?v=<?= time() ?>"></script>
     <script>
+        // Funções para controlar overlay das abas
+        function openTabsOverlay() {
+            const overlay = document.getElementById('tabsOverlay');
+            overlay.classList.add('active');
+            document.body.style.overflow = 'hidden'; // Prevenir scroll do body
+        }
+        
+        function closeTabsOverlay() {
+            const overlay = document.getElementById('tabsOverlay');
+            overlay.classList.remove('active');
+            document.body.style.overflow = 'auto'; // Restaurar scroll do body
+        }
+        
+        // Fechar overlay com ESC
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeTabsOverlay();
+            }
+        });
+        
+        // Fechar overlay clicando fora
+        document.addEventListener('click', function(e) {
+            const overlay = document.getElementById('tabsOverlay');
+            if (e.target === overlay) {
+                closeTabsOverlay();
+            }
+        });
+        
+        // Função para buscar 50% do tempo do vídeo como prévia
+        function seekToMidpoint(video) {
+            video.addEventListener('loadedmetadata', function() {
+                if (video.duration && video.duration > 0) {
+                    // Ir para 50% do tempo do vídeo
+                    video.currentTime = video.duration * 0.5;
+                }
+            });
+        }
+        
+        // Aplicar prévia aos vídeos compactos quando carregarem
+        document.addEventListener('DOMContentLoaded', function() {
+            const compactVideos = document.querySelectorAll('.video-thumbnail-compact video');
+            compactVideos.forEach(video => {
+                video.addEventListener('loadedmetadata', function() {
+                    if (this.duration && this.duration > 0) {
+                        // Ir para 50% do tempo do vídeo
+                        this.currentTime = this.duration * 0.5;
+                    }
+                });
+            });
+        });
+
         // Funções para controlar abas
         function showTab(tabName) {
             // Ocultar todas as abas
