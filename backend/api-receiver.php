@@ -71,6 +71,22 @@ switch (true) {
         handleDeleteUser();
         break;
     
+    case $uri === '/apps':
+        if ($method === 'GET') {
+            handleGetApps();
+        } elseif ($method === 'POST') {
+            handleCreateApp($data);
+        } elseif ($method === 'PUT') {
+            handleUpdateApp($data);
+        } elseif ($method === 'DELETE') {
+            handleDeleteApp();
+        }
+        break;
+    
+    case $uri === '/app-config':
+        handleGetAppConfig();
+        break;
+    
     case $uri === '/dashboard.php' || $uri === '/dashboard':
         // Headers no-cache para HTML
         header('Cache-Control: no-cache, no-store, must-revalidate');
@@ -427,6 +443,155 @@ function deleteDir($dir) {
         }
         rmdir($dir);
     }
+}
+
+// ===== GESTÃO DE APPS =====
+
+// Handler para listar todos os apps
+function handleGetApps() {
+    global $baseDir;
+    
+    $appsDir = $baseDir . '/apps';
+    $apps = [];
+    
+    if (is_dir($appsDir)) {
+        $files = array_diff(scandir($appsDir), ['.', '..']);
+        
+        foreach ($files as $file) {
+            if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
+                $appData = json_decode(file_get_contents($appsDir . '/' . $file), true);
+                if ($appData) {
+                    $apps[] = $appData;
+                }
+            }
+        }
+    }
+    
+    jsonResponse(['success' => true, 'apps' => $apps]);
+}
+
+// Handler para criar novo app
+function handleCreateApp($data) {
+    global $baseDir;
+    
+    if (!$data || !isset($data['bundleId']) || !isset($data['name']) || !isset($data['platform'])) {
+        jsonResponse(['error' => 'Missing required fields: bundleId, name, platform'], 400);
+    }
+    
+    $bundleId = $data['bundleId'];
+    $appsDir = $baseDir . '/apps';
+    ensureDir($appsDir);
+    
+    $appFile = $appsDir . '/' . $bundleId . '.json';
+    
+    // Verificar se app já existe
+    if (file_exists($appFile)) {
+        jsonResponse(['error' => 'App already exists'], 409);
+    }
+    
+    $appData = [
+        'bundleId' => $bundleId,
+        'name' => $data['name'],
+        'platform' => $data['platform'], // 'ios' ou 'android'
+        'config' => [
+            'recordScreen' => false,
+            'framerate' => 10,
+            'screenSize' => 480
+        ],
+        'createdAt' => time(),
+        'updatedAt' => time()
+    ];
+    
+    file_put_contents($appFile, json_encode($appData, JSON_PRETTY_PRINT));
+    
+    saveLog("App created: $bundleId");
+    jsonResponse(['success' => true, 'app' => $appData]);
+}
+
+// Handler para atualizar app
+function handleUpdateApp($data) {
+    global $baseDir;
+    
+    if (!$data || !isset($data['bundleId'])) {
+        jsonResponse(['error' => 'Missing bundleId'], 400);
+    }
+    
+    $bundleId = $data['bundleId'];
+    $appsDir = $baseDir . '/apps';
+    $appFile = $appsDir . '/' . $bundleId . '.json';
+    
+    if (!file_exists($appFile)) {
+        jsonResponse(['error' => 'App not found'], 404);
+    }
+    
+    $appData = json_decode(file_get_contents($appFile), true);
+    
+    // Atualizar campos se fornecidos
+    if (isset($data['name'])) {
+        $appData['name'] = $data['name'];
+    }
+    
+    if (isset($data['config'])) {
+        $appData['config'] = array_merge($appData['config'], $data['config']);
+    }
+    
+    $appData['updatedAt'] = time();
+    
+    file_put_contents($appFile, json_encode($appData, JSON_PRETTY_PRINT));
+    
+    saveLog("App updated: $bundleId");
+    jsonResponse(['success' => true, 'app' => $appData]);
+}
+
+// Handler para deletar app
+function handleDeleteApp() {
+    global $baseDir;
+    
+    if (!isset($_GET['bundleId'])) {
+        jsonResponse(['error' => 'Missing bundleId'], 400);
+    }
+    
+    $bundleId = $_GET['bundleId'];
+    $appsDir = $baseDir . '/apps';
+    $appFile = $appsDir . '/' . $bundleId . '.json';
+    
+    if (!file_exists($appFile)) {
+        jsonResponse(['error' => 'App not found'], 404);
+    }
+    
+    unlink($appFile);
+    
+    saveLog("App deleted: $bundleId");
+    jsonResponse(['success' => true]);
+}
+
+// Handler para app consultar sua configuração
+function handleGetAppConfig() {
+    global $baseDir;
+    
+    if (!isset($_GET['bundleId'])) {
+        jsonResponse(['error' => 'Missing bundleId'], 400);
+    }
+    
+    $bundleId = $_GET['bundleId'];
+    $appsDir = $baseDir . '/apps';
+    $appFile = $appsDir . '/' . $bundleId . '.json';
+    
+    if (!file_exists($appFile)) {
+        // Retornar configuração padrão se app não existe
+        $defaultConfig = [
+            'recordScreen' => false,
+            'framerate' => 10,
+            'screenSize' => 480
+        ];
+        jsonResponse(['success' => true, 'config' => $defaultConfig]);
+        return;
+    }
+    
+    $appData = json_decode(file_get_contents($appFile), true);
+    
+    saveLog("Config requested for app: $bundleId");
+    jsonResponse(['success' => true, 'config' => $appData['config']]);
 }
 
 saveLog("Request completed");

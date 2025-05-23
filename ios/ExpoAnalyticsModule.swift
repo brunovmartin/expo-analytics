@@ -25,9 +25,11 @@ public class ExpoAnalyticsModule: Module {
   private var displayLink: CADisplayLink?
   private var framerate: Int = 30
   private var frameCount: Int = 0
+  private var screenSize: CGSize = CGSize(width: 480, height: 960)
+  private var recordScreenEnabled: Bool = false
 
   private var userId: String = "anonymous"
-  private var apiHost: String = "https://suaapi.com/upload"
+  private var apiHost: String = "https://suaapi.com"
   private var userData: [String: Any] = [:]
   private var geoData: [String: Any] = [:]
 
@@ -42,26 +44,66 @@ public class ExpoAnalyticsModule: Module {
     Name("ExpoAnalytics")
 
     OnAppEntersBackground {
-      self.sendScreenshotsBuffer()
+      if self.recordScreenEnabled {
+        self.sendScreenshotsBuffer()
+      }
+    }
+
+    AsyncFunction("fetchAppConfig") { (apiHost: String, bundleId: String?) -> [String: Any] in
+      return await self.fetchAppConfigFromServer(apiHost: apiHost, bundleId: bundleId)
     }
 
     AsyncFunction("start") { (options: [String: Any]?) in
       if let config = options {
         if let id = config["userId"] as? String { self.userId = id }
-        if let fps = config["framerate"] as? Int { self.framerate = fps }
         if let host = config["apiHost"] as? String { self.apiHost = host }
         if let data = config["userData"] as? [String: Any] { self.userData = data }
       }
 
+      // Buscar bundle ID do app
+      let bundleId = Bundle.main.bundleIdentifier ?? "unknown.app"
+      NSLog("📱 [ExpoAnalytics] Bundle ID: \(bundleId)")
+
+      // Buscar configurações do servidor
+      let serverConfig = await self.fetchAppConfigFromServer(apiHost: self.apiHost, bundleId: bundleId)
+      
+      // Aplicar configurações
+      self.recordScreenEnabled = serverConfig["recordScreen"] as? Bool ?? false
+      self.framerate = serverConfig["framerate"] as? Int ?? 10
+      if let size = serverConfig["screenSize"] as? Int {
+        // Manter proporção de 1:2 (largura:altura)
+        self.screenSize = CGSize(width: size, height: size * 2)
+      }
+      
+      // Aplicar overrides das opções se fornecidas
+      if let config = options {
+        if let fps = config["framerate"] as? Int { self.framerate = fps }
+        if let size = config["screenSize"] as? Int {
+          self.screenSize = CGSize(width: size, height: size * 2)
+        }
+      }
+
+      NSLog("🔧 [ExpoAnalytics] Configurações aplicadas:")
+      NSLog("   Record Screen: \(self.recordScreenEnabled)")
+      NSLog("   Framerate: \(self.framerate) fps")
+      NSLog("   Screen Size: \(Int(self.screenSize.width))x\(Int(self.screenSize.height))")
+
+      // Enviar informações do usuário
       self.fetchGeoInfo {
         self.sendUserInfoPayload()
       }
 
-      DispatchQueue.main.async {
-        self.displayLink?.invalidate()
-        self.displayLink = CADisplayLink(target: self, selector: #selector(self.captureFrame))
-        self.displayLink?.preferredFramesPerSecond = self.framerate
-        self.displayLink?.add(to: .main, forMode: .common)
+      // Iniciar captura apenas se record screen estiver ativo
+      if self.recordScreenEnabled {
+        DispatchQueue.main.async {
+          self.displayLink?.invalidate()
+          self.displayLink = CADisplayLink(target: self, selector: #selector(self.captureFrame))
+          self.displayLink?.preferredFramesPerSecond = self.framerate
+          self.displayLink?.add(to: .main, forMode: .common)
+          NSLog("🎬 [ExpoAnalytics] Captura de tela iniciada com \(self.framerate) fps")
+        }
+      } else {
+        NSLog("⚠️ [ExpoAnalytics] Record Screen desabilitado - captura não iniciada")
       }
     }
 
@@ -69,6 +111,7 @@ public class ExpoAnalyticsModule: Module {
       DispatchQueue.main.async {
         self.displayLink?.invalidate()
         self.displayLink = nil
+        NSLog("⏹️ [ExpoAnalytics] Captura de tela parada")
       }
     }
 
@@ -110,18 +153,55 @@ public class ExpoAnalyticsModule: Module {
     }
   }
 
+  private func fetchAppConfigFromServer(apiHost: String, bundleId: String?) async -> [String: Any] {
+    let bundle = bundleId ?? Bundle.main.bundleIdentifier ?? "unknown.app"
+    
+    guard let url = URL(string: "\(apiHost)/app-config?bundleId=\(bundle)") else {
+      NSLog("❌ [ExpoAnalytics] URL inválida para buscar config: \(apiHost)")
+      return defaultConfig()
+    }
+
+    NSLog("🔍 [ExpoAnalytics] Buscando configurações para: \(bundle)")
+
+    do {
+      let (data, response) = try await URLSession.shared.data(from: url)
+      
+      if let httpResponse = response as? HTTPURLResponse {
+        NSLog("📡 [ExpoAnalytics] Config response status: \(httpResponse.statusCode)")
+        
+        if httpResponse.statusCode == 200 {
+          if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+             let config = json["config"] as? [String: Any] {
+            NSLog("✅ [ExpoAnalytics] Configurações recebidas: \(config)")
+            return config
+          }
+        }
+      }
+    } catch {
+      NSLog("❌ [ExpoAnalytics] Erro ao buscar configurações: \(error)")
+    }
+
+    NSLog("⚙️ [ExpoAnalytics] Usando configurações padrão")
+    return defaultConfig()
+  }
+
+  private func defaultConfig() -> [String: Any] {
+    return [
+      "recordScreen": false,
+      "framerate": 10,
+      "screenSize": 480
+    ]
+  }
+
   @objc
   private func captureFrame() {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
           let window = windowScene.windows.first else { return }
 
-    // Força resolução específica independente da tela
-    let targetSize = CGSize(width: 480, height: 960)
     let originalBounds = window.bounds
     
     // Captura em alta resolução considerando scale factor
     let scale = UIScreen.main.scale
-    let captureSize = CGSize(width: originalBounds.width * scale, height: originalBounds.height * scale)
     
     // Criar contexto de imagem em alta resolução
     UIGraphicsBeginImageContextWithOptions(originalBounds.size, false, scale)
@@ -134,11 +214,10 @@ public class ExpoAnalyticsModule: Module {
       return 
     }
     
-    // Redimensionar para exatamente 480×960 pixels
-    let renderer = UIGraphicsImageRenderer(size: targetSize)
+    // Redimensionar para o tamanho configurado
+    let renderer = UIGraphicsImageRenderer(size: self.screenSize)
     let resizedImage = renderer.image { context in
-      // Desenhar imagem redimensionada
-      image.draw(in: CGRect(origin: .zero, size: targetSize))
+      image.draw(in: CGRect(origin: .zero, size: self.screenSize))
     }
 
     // Comprimir com exatamente 50% de qualidade
@@ -151,7 +230,7 @@ public class ExpoAnalyticsModule: Module {
     let finalSize = compressedData.count
     let timestamp = Int(Date().timeIntervalSince1970 * 1000)
     
-    NSLog("📸 [ExpoAnalytics] Screenshot: \(targetSize.width)×\(targetSize.height), \(finalSize/1024)KB")
+    NSLog("📸 [ExpoAnalytics] Screenshot: \(Int(self.screenSize.width))×\(Int(self.screenSize.height)), \(finalSize/1024)KB")
     
     // Salvar arquivo temporário
     let filename = screenshotsFolder.appendingPathComponent("frame_\(timestamp).jpg")
@@ -161,8 +240,9 @@ public class ExpoAnalyticsModule: Module {
       
       NSLog("💾 [ExpoAnalytics] Frame \(frameCount) salvo: \(finalSize/1024)KB")
       
-      // Enviar buffer quando atingir 300 frames (10 segundos a 30 FPS)
-      if frameCount >= 300 {
+      // Enviar buffer quando atingir 300 frames (10 segundos a 30 FPS máx)
+      let maxFrames = min(300, self.framerate * 10) // 10 segundos no framerate atual
+      if frameCount >= maxFrames {
         NSLog("📤 [ExpoAnalytics] Enviando buffer com \(frameCount) frames")
         sendScreenshotsBuffer()
         frameCount = 0

@@ -5,10 +5,22 @@ export interface StartOptions {
   apiHost?: string;
   userId?: string;
   framerate?: number;
+  screenSize?: number;
   userData?: Record<string, any>;
 }
 
+export interface AppConfig {
+  recordScreen: boolean;
+  framerate: number;
+  screenSize: number;
+}
+
 declare class ExpoAnalyticsModule extends NativeModule<ExpoAnalyticsModuleEvents> {
+  /**
+   * Busca configurações do app no servidor pelo bundle ID
+   */
+  fetchAppConfig(apiHost: string, bundleId?: string): Promise<AppConfig>;
+  
   /**
    * Inicia a captura de screenshots e análise
    */
