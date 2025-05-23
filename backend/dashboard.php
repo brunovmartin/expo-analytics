@@ -285,24 +285,34 @@ function getUserVideos($baseDir, $userId) {
             if (is_dir($dateDir)) {
                 $date = basename($dateDir);
                 $videoFiles = glob($dateDir . '/*.mp4');
-                $metadataFiles = glob($dateDir . '/metadata_*.json');
+                $metadataFiles = glob($dateDir . '/session_*.json');
                 
                 foreach ($videoFiles as $videoFile) {
                     $videoName = basename($videoFile);
                     $videoSize = filesize($videoFile);
                     
-                    // Buscar metadados correspondentes
+                    // Buscar metadados correspondentes baseado no sessionId
                     $metadata = null;
-                    $timestamp = null;
+                    $sessionId = null;
                     
-                    // Extrair timestamp do nome do arquivo (formato: video_TIMESTAMP.mp4)
-                    if (preg_match('/video_(\d+)\.mp4/', $videoName, $matches)) {
-                        $timestamp = $matches[1];
+                    // Extrair sessionId do nome do arquivo (formato: session_SESSIONID.mp4)
+                    if (preg_match('/session_([^.]+)\.mp4/', $videoName, $matches)) {
+                        $sessionId = $matches[1];
                         
                         // Buscar arquivo de metadados correspondente
+                        $metadataFile = $dateDir . '/session_' . $sessionId . '.json';
+                        if (file_exists($metadataFile)) {
+                            $metadata = json_decode(file_get_contents($metadataFile), true);
+                        }
+                    }
+                    
+                    // Fallback para formato antigo (video_TIMESTAMP.mp4)
+                    if (!$metadata && preg_match('/video_(\d+)\.mp4/', $videoName, $matches)) {
+                        $timestamp = $matches[1];
                         $metadataFile = $dateDir . '/metadata_' . $timestamp . '.json';
                         if (file_exists($metadataFile)) {
                             $metadata = json_decode(file_get_contents($metadataFile), true);
+                            $sessionId = 'legacy_' . $timestamp;
                         }
                     }
                     
@@ -311,7 +321,16 @@ function getUserVideos($baseDir, $userId) {
                         'filename' => $videoName,
                         'path' => $videoFile,
                         'size' => $videoSize,
-                        'timestamp' => $timestamp ? (int)$timestamp : filemtime($videoFile),
+                        'sessionId' => $sessionId,
+                        'timestamp' => $metadata['timestamp'] ?? filemtime($videoFile),
+                        'sessionDuration' => $metadata['sessionDuration'] ?? 0,
+                        'frameCount' => $metadata['frameCount'] ?? $metadata['actualImageCount'] ?? 0,
+                        'actualFrames' => $metadata['actualImageCount'] ?? $metadata['frameCount'] ?? 0,
+                        'framerate' => $metadata['framerate'] ?? 10,
+                        'effectiveFPS' => $metadata['effectiveFPS'] ?? 0,
+                        'compressionRatio' => $metadata['compressionRatio'] ?? 0,
+                        'platform' => $metadata['platform'] ?? 'unknown',
+                        'appVersion' => $metadata['appVersion'] ?? 'unknown',
                         'metadata' => $metadata
                     ];
                 }
@@ -983,7 +1002,7 @@ $screenSizeOptions = [
                                     
                                     <!-- Aba Vídeos -->
                                     <div id="videos-tab" class="tab-content">
-                                        <h3><i class="fas fa-film"></i> Vídeos Gravados</h3>
+                                        <h3><i class="fas fa-film"></i> Sessões Gravadas</h3>
                                         <?php if (!empty($userData['allVideos'])): ?>
                                         <div class="videos-grid">
                                             <?php foreach ($userData['allVideos'] as $video): ?>
@@ -1000,24 +1019,43 @@ $screenSizeOptions = [
                                                     <div class="video-duration">
                                                         <i class="fas fa-clock"></i>
                                                         <?php 
-                                                        if (isset($video['metadata']['imageCount'])) {
-                                                            $framerate = $video['metadata']['userData']['framerate'] ?? 10;
-                                                            $duration = round($video['metadata']['imageCount'] / $framerate);
+                                                        if ($video['sessionDuration'] > 0) {
+                                                            $duration = $video['sessionDuration'];
                                                             echo sprintf('%02d:%02d', floor($duration / 60), $duration % 60);
                                                         } else {
                                                             echo '00:00';
                                                         }
                                                         ?>
                                                     </div>
+                                                    <?php if ($video['sessionId']): ?>
+                                                    <div class="session-id">
+                                                        <i class="fas fa-tag"></i>
+                                                        <?= substr($video['sessionId'], 0, 8) ?>...
+                                                    </div>
+                                                    <?php endif; ?>
                                                 </div>
                                                 <div class="video-info">
                                                     <h4><?= date('d/m/Y H:i', $video['timestamp']) ?></h4>
                                                     <p><i class="fas fa-hdd"></i> <?= number_format($video['size'] / 1024 / 1024, 1) ?> MB</p>
-                                                    <?php if (isset($video['metadata']['imageCount'])): ?>
-                                                    <p><i class="fas fa-images"></i> <?= $video['metadata']['imageCount'] ?> frames</p>
+                                                    
+                                                    <?php if ($video['sessionDuration'] > 0): ?>
+                                                    <p><i class="fas fa-stopwatch"></i> <?= number_format($video['sessionDuration'], 1) ?>s sessão</p>
                                                     <?php endif; ?>
-                                                    <?php if (isset($video['metadata']['compressionRatio'])): ?>
-                                                    <p><i class="fas fa-compress"></i> <?= $video['metadata']['compressionRatio'] ?>% compressão</p>
+                                                    
+                                                    <?php if ($video['frameCount'] > 0): ?>
+                                                    <p><i class="fas fa-images"></i> <?= $video['frameCount'] ?> frames (<?= $video['actualFrames'] ?> real)</p>
+                                                    <?php endif; ?>
+                                                    
+                                                    <?php if ($video['effectiveFPS'] > 0): ?>
+                                                    <p><i class="fas fa-tachometer-alt"></i> <?= $video['effectiveFPS'] ?> FPS efetivo</p>
+                                                    <?php endif; ?>
+                                                    
+                                                    <?php if ($video['compressionRatio'] > 0): ?>
+                                                    <p><i class="fas fa-compress"></i> <?= $video['compressionRatio'] ?>% compressão</p>
+                                                    <?php endif; ?>
+                                                    
+                                                    <?php if ($video['platform'] !== 'unknown'): ?>
+                                                    <p><i class="fas fa-mobile-alt"></i> <?= ucfirst($video['platform']) ?> <?= $video['appVersion'] ?></p>
                                                     <?php endif; ?>
                                                 </div>
                                             </div>
@@ -1026,8 +1064,8 @@ $screenSizeOptions = [
                                         <?php else: ?>
                                         <div class="empty-videos">
                                             <i class="fas fa-film"></i>
-                                            <h4>Nenhum vídeo encontrado</h4>
-                                            <p>Os vídeos gerados a partir dos screenshots aparecerão aqui.</p>
+                                            <h4>Nenhuma sessão gravada</h4>
+                                            <p>As sessões de vídeo aparecerão aqui quando o app for para background.</p>
                                         </div>
                                         <?php endif; ?>
                                     </div>

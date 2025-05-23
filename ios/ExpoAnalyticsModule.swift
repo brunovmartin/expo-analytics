@@ -129,6 +129,10 @@ public class ExpoAnalyticsModule: Module {
   private var targetFrameInterval: CFTimeInterval = 1.0/10.0 // Padrão: 10 FPS máximo
   private var isCapturing: Bool = false
   private var captureQueue: DispatchQueue = DispatchQueue(label: "screenshot.capture", qos: .utility)
+  
+  // Controle de sessão
+  private var currentSessionId: String = ""
+  private var sessionStartTime: Date?
 
   private let screenshotsFolder: URL = {
     let tmp = FileManager.default.temporaryDirectory
@@ -140,9 +144,19 @@ public class ExpoAnalyticsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoAnalytics")
 
+    // Detectar quando o app vai para background - ENVIAR SESSÃO COMPLETA
     OnAppEntersBackground {
+      NSLog("🔄 [ExpoAnalytics] App entrando em background - finalizando sessão")
+      if self.recordScreenEnabled && self.frameCount > 0 {
+        self.finishCurrentSession()
+      }
+    }
+    
+    // Detectar quando o app volta para foreground - INICIAR NOVA SESSÃO
+    OnAppEntersForeground {
+      NSLog("🔄 [ExpoAnalytics] App voltando para foreground - iniciando nova sessão")
       if self.recordScreenEnabled {
-        self.sendScreenshotsBuffer()
+        self.startNewSession()
       }
     }
 
@@ -196,6 +210,7 @@ public class ExpoAnalyticsModule: Module {
       // Iniciar captura apenas se record screen estiver ativo
       if self.recordScreenEnabled {
         DispatchQueue.main.async {
+          self.startNewSession()
           self.startOptimizedCapture()
         }
       } else {
@@ -204,7 +219,11 @@ public class ExpoAnalyticsModule: Module {
     }
 
     AsyncFunction("stop") { () in
+      NSLog("⏹️ [ExpoAnalytics] Stop chamado - finalizando sessão atual")
       DispatchQueue.main.async {
+        if self.recordScreenEnabled && self.frameCount > 0 {
+          self.finishCurrentSession()
+        }
         self.stopCapture()
       }
     }
@@ -242,6 +261,33 @@ public class ExpoAnalyticsModule: Module {
 
       self.sendUserInfoPayload()
     }
+  }
+
+  private func startNewSession() {
+    // Limpar sessão anterior se houver
+    clearLocalScreenshots()
+    
+    // Criar nova sessão
+    self.currentSessionId = UUID().uuidString
+    self.sessionStartTime = Date()
+    self.frameCount = 0
+    
+    NSLog("🆕 [ExpoAnalytics] Nova sessão iniciada: \(self.currentSessionId)")
+  }
+  
+  private func finishCurrentSession() {
+    guard self.frameCount > 0 else {
+      NSLog("⚠️ [ExpoAnalytics] Sessão vazia - nenhum frame capturado")
+      return
+    }
+    
+    let sessionDuration = Date().timeIntervalSince(self.sessionStartTime ?? Date())
+    NSLog("📤 [ExpoAnalytics] Finalizando sessão \(self.currentSessionId)")
+    NSLog("   Duração: \(String(format: "%.1f", sessionDuration))s")
+    NSLog("   Frames: \(self.frameCount)")
+    
+    // Enviar sessão completa
+    self.sendCurrentSession()
   }
 
   private func fetchAppConfigFromServer(apiHost: String, bundleId: String?) async -> [String: Any] {
@@ -376,38 +422,38 @@ public class ExpoAnalyticsModule: Module {
     let timestamp = Int(Date().timeIntervalSince1970 * 1000)
     
     // Log apenas ocasionalmente para não sobrecarregar
-    if frameCount % 10 == 0 {
+    if frameCount % 30 == 0 {
       NSLog("📸 [ExpoAnalytics] Screenshot \(frameCount): \(Int(screenSize.width))×\(Int(screenSize.height)), \(finalSize/1024)KB, Q:\(Int(quality*100))%")
     }
     
-    // Salvar arquivo temporário
-    let filename = screenshotsFolder.appendingPathComponent("frame_\(timestamp).jpg")
+    // Salvar arquivo temporário com nome sequencial para ordenação correta
+    let filename = screenshotsFolder.appendingPathComponent("frame_\(String(format: "%06d", frameCount))_\(timestamp).jpg")
     do {
       try compressedData.write(to: filename)
       frameCount += 1
       
-      // Enviar buffer ajustado por framerate - máximo 8 segundos de captura
-      let maxFrames = min(self.framerate * 8, 120) // Limite máximo de 120 frames
-      if frameCount >= maxFrames {
-        NSLog("📤 [ExpoAnalytics] Enviando buffer com \(frameCount) frames")
-        DispatchQueue.main.async { [weak self] in
-          self?.sendScreenshotsBuffer()
-          self?.frameCount = 0
-        }
-      }
+      // REMOVIDO: Não enviar baseado em número de frames
+      // Agora só envia quando o app vai para background ou stop() é chamado
+      
     } catch {
       NSLog("❌ [ExpoAnalytics] Erro ao salvar frame: \(error)")
     }
   }
 
-  private func sendScreenshotsBuffer() {
-    NSLog("🔄 [ExpoAnalytics] Iniciando processo de upload com ZIP...")
+  private func sendCurrentSession() {
+    NSLog("🔄 [ExpoAnalytics] Enviando sessão atual com \(frameCount) frames...")
+    
+    let sessionDuration = Date().timeIntervalSince(self.sessionStartTime ?? Date())
     
     let metadata: [String: Any] = [
       "userId": self.userId,
       "userData": self.userData,
+      "sessionId": self.currentSessionId,
       "timestamp": Date().timeIntervalSince1970,
-      "format": "zip" // Indicar que está enviando ZIP
+      "sessionDuration": sessionDuration,
+      "frameCount": self.frameCount,
+      "framerate": self.framerate,
+      "format": "zip"
     ]
 
     guard let url = URL(string: apiHost + "/upload-zip") else { 
@@ -421,7 +467,7 @@ public class ExpoAnalyticsModule: Module {
       return
     }
     
-    NSLog("📦 [ExpoAnalytics] ZIP criado: \(zipData.count/1024/1024)MB")
+    NSLog("📦 [ExpoAnalytics] ZIP da sessão criado: \(zipData.count/1024/1024)MB")
     
     // Criar requisição multipart
     let boundary = "Boundary-\(UUID().uuidString)"
@@ -441,7 +487,7 @@ public class ExpoAnalyticsModule: Module {
     
     // Adicionar arquivo ZIP
     body.append("--\(boundary)\r\n".data(using: .utf8)!)
-    body.append("Content-Disposition: form-data; name=\"screenshots\"; filename=\"screenshots_\(Int(Date().timeIntervalSince1970)).zip\"\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"screenshots\"; filename=\"session_\(self.currentSessionId).zip\"\r\n".data(using: .utf8)!)
     body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
     body.append(zipData)
     body.append("\r\n".data(using: .utf8)!)
@@ -454,16 +500,16 @@ public class ExpoAnalyticsModule: Module {
       let duration = Date().timeIntervalSince(startTime)
       
       if let error = error {
-        NSLog("❌ [ExpoAnalytics] Erro no upload: \(error.localizedDescription)")
+        NSLog("❌ [ExpoAnalytics] Erro no upload da sessão: \(error.localizedDescription)")
       } else if let httpResponse = response as? HTTPURLResponse {
         let statusCode = httpResponse.statusCode
         let responseSize = data?.count ?? 0
         
-        NSLog("✅ [ExpoAnalytics] Upload ZIP concluído em \(String(format: "%.1f", duration))s")
+        NSLog("✅ [ExpoAnalytics] Upload da sessão concluído em \(String(format: "%.1f", duration))s")
         NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
         
         if statusCode == 200 {
-          NSLog("🎉 [ExpoAnalytics] ZIP enviado com sucesso!")
+          NSLog("🎉 [ExpoAnalytics] Sessão \(self.currentSessionId) enviada com sucesso!")
           
           // Limpar screenshots locais apenas se upload foi bem-sucedido
           DispatchQueue.main.async {
@@ -471,12 +517,17 @@ public class ExpoAnalyticsModule: Module {
             self.frameCount = 0
           }
         } else {
-          NSLog("⚠️ [ExpoAnalytics] Upload com status não-200, mantendo arquivos locais")
+          NSLog("⚠️ [ExpoAnalytics] Upload da sessão com status não-200, mantendo arquivos locais")
         }
       }
     }.resume()
   }
-  
+
+  // Alias para manter compatibilidade
+  private func sendScreenshotsBuffer() {
+    sendCurrentSession()
+  }
+
   private func createZipFromScreenshots() -> Data? {
     let fileManager = FileManager.default
     

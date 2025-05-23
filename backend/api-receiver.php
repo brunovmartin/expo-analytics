@@ -614,11 +614,11 @@ function handleGetAppConfig() {
 function handleUploadZip() {
     global $baseDir;
     
-    saveLog("📦 Processando upload ZIP...");
+    saveLog("�� Processando upload de sessão...");
     
     // Verificar se é um upload multipart
     if (!isset($_FILES['screenshots']) || !isset($_POST['metadata'])) {
-        saveLog("❌ Dados ZIP inválidos ou ausentes");
+        saveLog("❌ Dados de sessão inválidos ou ausentes");
         jsonResponse(['error' => 'Missing ZIP file or metadata'], 400);
     }
     
@@ -626,18 +626,28 @@ function handleUploadZip() {
     $metadata = json_decode($_POST['metadata'], true);
     
     if (!$metadata || !isset($metadata['userId'])) {
-        saveLog("❌ Metadados inválidos ou userId ausente");
+        saveLog("❌ Metadados de sessão inválidos ou userId ausente");
         jsonResponse(['error' => 'Invalid metadata'], 400);
     }
     
     $userId = $metadata['userId'];
+    $sessionId = $metadata['sessionId'] ?? 'session_' . time();
     $timestamp = isset($metadata['timestamp']) ? (int)$metadata['timestamp'] : time();
+    $sessionDuration = $metadata['sessionDuration'] ?? 0;
+    $frameCount = $metadata['frameCount'] ?? 0;
+    $framerate = $metadata['framerate'] ?? 10;
     $date = date('Y-m-d', $timestamp);
     
     // Buscar dados geográficos pelo IP do usuário
     $geoData = fetchGeoInfo();
     
-    saveLog("📥 ZIP recebido para usuário $userId de {$geoData['flag']} {$geoData['country']} - Tamanho: " . formatBytes($uploadedFile['size']));
+    saveLog("📥 Sessão recebida:");
+    saveLog("   Usuário: $userId");
+    saveLog("   Sessão: $sessionId");
+    saveLog("   Duração: " . round($sessionDuration, 1) . "s");
+    saveLog("   Frames: $frameCount @ {$framerate}fps");
+    saveLog("   Localização: {$geoData['flag']} {$geoData['city']}, {$geoData['region']}");
+    saveLog("   Tamanho ZIP: " . formatBytes($uploadedFile['size']));
     
     // Criar diretórios
     $userDir = $baseDir . '/videos/' . $userId . '/' . $date;
@@ -646,7 +656,7 @@ function handleUploadZip() {
     ensureDir($tempDir);
     
     // Mover arquivo ZIP para pasta temporária
-    $zipPath = $tempDir . '/screenshots.zip';
+    $zipPath = $tempDir . '/session.zip';
     if (!move_uploaded_file($uploadedFile['tmp_name'], $zipPath)) {
         saveLog("❌ Erro ao mover arquivo ZIP");
         jsonResponse(['error' => 'Failed to process ZIP file'], 500);
@@ -659,57 +669,112 @@ function handleUploadZip() {
     $imageCount = extractZipImages($zipPath, $extractedPath);
     
     if ($imageCount === 0) {
-        saveLog("❌ Nenhuma imagem extraída do ZIP");
+        saveLog("❌ Nenhuma imagem extraída da sessão");
         cleanupTempDir($tempDir);
-        jsonResponse(['error' => 'No images found in ZIP'], 400);
+        jsonResponse(['error' => 'No images found in session'], 400);
     }
     
-    saveLog("📸 $imageCount imagens extraídas do ZIP");
+    saveLog("📸 $imageCount imagens extraídas da sessão");
+    
+    // Validar se o número de frames bate
+    if ($frameCount > 0 && abs($imageCount - $frameCount) > 2) {
+        saveLog("⚠️ Divergência na contagem de frames: esperado $frameCount, encontrado $imageCount");
+    }
     
     // Gerar MP4 a partir das imagens
-    $videoFileName = "video_" . $timestamp . ".mp4";
+    $videoFileName = "session_{$sessionId}.mp4";
     $videoPath = $userDir . '/' . $videoFileName;
     
     $success = generateMP4FromImages($extractedPath, $videoPath, $metadata);
     
     if ($success) {
-        // Salvar metadados do vídeo
-        $videoMetadata = [
+        $videoSize = file_exists($videoPath) ? filesize($videoPath) : 0;
+        $compressionRatio = $uploadedFile['size'] > 0 ? 
+            round((1 - $videoSize / $uploadedFile['size']) * 100, 1) : 0;
+        
+        // Salvar metadados completos da sessão
+        $sessionMetadata = [
             'userId' => $userId,
+            'sessionId' => $sessionId,
             'timestamp' => $timestamp,
+            'sessionStartTime' => $timestamp - $sessionDuration,
+            'sessionDuration' => $sessionDuration,
+            'frameCount' => $frameCount,
+            'actualImageCount' => $imageCount,
+            'framerate' => $framerate,
             'userData' => $metadata['userData'] ?? [],
             'geo' => $geoData,
             'receivedAt' => time(),
-            'imageCount' => $imageCount,
             'videoFile' => $videoFileName,
             'originalZipSize' => $uploadedFile['size'],
-            'videoSize' => file_exists($videoPath) ? filesize($videoPath) : 0,
-            'compressionRatio' => file_exists($videoPath) ? 
-                round((1 - filesize($videoPath) / $uploadedFile['size']) * 100, 1) : 0
+            'videoSize' => $videoSize,
+            'compressionRatio' => $compressionRatio,
+            'platform' => $metadata['userData']['platform'] ?? 'unknown',
+            'appVersion' => $metadata['userData']['appVersion'] ?? 'unknown',
+            'effectiveFPS' => $sessionDuration > 0 ? round($imageCount / $sessionDuration, 1) : 0
         ];
         
-        $metadataFile = $userDir . '/metadata_' . $timestamp . '.json';
-        file_put_contents($metadataFile, json_encode($videoMetadata, JSON_PRETTY_PRINT));
+        $metadataFile = $userDir . '/session_' . $sessionId . '.json';
+        file_put_contents($metadataFile, json_encode($sessionMetadata, JSON_PRETTY_PRINT));
         
-        saveLog("✅ MP4 gerado com sucesso: " . formatBytes(filesize($videoPath)));
-        saveLog("📊 Taxa de compressão: {$videoMetadata['compressionRatio']}%");
+        saveLog("✅ Vídeo de sessão gerado: " . formatBytes($videoSize));
+        saveLog("📊 Compressão: {$compressionRatio}% | FPS efetivo: {$sessionMetadata['effectiveFPS']}");
+        
+        // Atualizar dados do usuário com informações da sessão
+        updateUserLatestInfo($userId, $sessionMetadata);
         
         // Limpar arquivos temporários (ZIP e imagens extraídas)
         cleanupTempDir($tempDir);
         
         jsonResponse([
             'success' => true,
+            'sessionId' => $sessionId,
             'videoFile' => $videoFileName,
-            'imageCount' => $imageCount,
+            'sessionDuration' => $sessionDuration,
+            'frameCount' => $frameCount,
+            'actualImageCount' => $imageCount,
             'originalSize' => formatBytes($uploadedFile['size']),
-            'videoSize' => formatBytes($videoMetadata['videoSize']),
-            'compressionRatio' => $videoMetadata['compressionRatio'] . '%'
+            'videoSize' => formatBytes($videoSize),
+            'compressionRatio' => $compressionRatio . '%',
+            'effectiveFPS' => $sessionMetadata['effectiveFPS']
         ]);
     } else {
-        saveLog("❌ Erro ao gerar MP4");
+        saveLog("❌ Erro ao gerar MP4 da sessão");
         cleanupTempDir($tempDir);
-        jsonResponse(['error' => 'Failed to generate MP4'], 500);
+        jsonResponse(['error' => 'Failed to generate session video'], 500);
     }
+}
+
+// Função para atualizar dados mais recentes do usuário
+function updateUserLatestInfo($userId, $sessionData) {
+    global $baseDir;
+    
+    $userInfoDir = $baseDir . '/users/' . $userId;
+    ensureDir($userInfoDir);
+    
+    $latestFile = $userInfoDir . '/latest.json';
+    
+    // Carregar dados existentes ou criar novos
+    $latestInfo = file_exists($latestFile) ? 
+        json_decode(file_get_contents($latestFile), true) : [];
+    
+    // Atualizar com dados da sessão mais recente
+    $latestInfo = array_merge($latestInfo, [
+        'userId' => $userId,
+        'lastSessionId' => $sessionData['sessionId'],
+        'lastSessionTime' => $sessionData['timestamp'],
+        'userData' => $sessionData['userData'],
+        'geo' => $sessionData['geo'],
+        'receivedAt' => $sessionData['receivedAt'],
+        'totalSessions' => ($latestInfo['totalSessions'] ?? 0) + 1,
+        'totalFrames' => ($latestInfo['totalFrames'] ?? 0) + $sessionData['actualImageCount'],
+        'platform' => $sessionData['platform'],
+        'appVersion' => $sessionData['appVersion']
+    ]);
+    
+    file_put_contents($latestFile, json_encode($latestInfo, JSON_PRETTY_PRINT));
+    
+    saveLog("👤 Dados do usuário $userId atualizados - Total de sessões: {$latestInfo['totalSessions']}");
 }
 
 // Função para extrair imagens do ZIP

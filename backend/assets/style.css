@@ -1534,6 +1534,22 @@ body {
     gap: 0.25rem;
 }
 
+.session-id {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(102, 126, 234, 0.9);
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-family: 'Courier New', monospace;
+    font-weight: 600;
+}
+
 .video-info {
     padding: 1rem;
 }
