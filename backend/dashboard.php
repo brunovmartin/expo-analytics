@@ -819,6 +819,14 @@ $screenSizeOptions = [
                     <!-- Coluna 2: Dados do Usuário -->
                     <div class="panel">
                         <div class="panel-header">
+                            <div class="panel-header-left">
+                                <?php if ($selectedUser): ?>
+                                <a href="?app=<?= urlencode($selectedApp) ?>" class="btn btn-secondary">
+                                    <i class="fas fa-arrow-left"></i> Voltar
+                                </a>
+                                &nbsp;&nbsp;
+                                <?php endif; ?>
+                            </div>
                             <h2>
                                 <i class="fas fa-user-cog"></i> 
                                 <?php if ($selectedUser): ?>
@@ -832,283 +840,323 @@ $screenSizeOptions = [
                                 <button onclick="deleteUserData('<?= htmlspecialchars($selectedUser) ?>')" class="btn btn-danger">
                                     <i class="fas fa-trash"></i> Deletar Dados
                                 </button>
-                                <a href="?app=<?= urlencode($selectedApp) ?>" class="btn btn-secondary">
-                                    <i class="fas fa-arrow-left"></i> Voltar
-                                </a>
                                 <?php endif; ?>
                             </div>
                         </div>
                         <div class="panel-content">
                             <?php if ($selectedUser && $userData): ?>
                             
-                            <!-- Dados do Usuário -->
-                            <div class="user-details">
-                                <!-- Identificação -->
-                                <div class="detail-section">
-                                    <h3><i class="fas fa-id-card"></i> Identificação</h3>
-                                    <div class="detail-grid">
-                                        <div class="detail-item">
-                                            <label>User ID:</label>
-                                            <span><?= htmlspecialchars($userData['userId']) ?></span>
+                            <!-- Layout Principal: Duas Colunas -->
+                            <div class="user-layout-container">
+                                
+                                <!-- Coluna Esquerda: Dados do Usuário em Grid 2x2 -->
+                                <div class="user-details-grid">
+                                    <!-- Identificação -->
+                                    <div class="detail-section">
+                                        <h3><i class="fas fa-id-card"></i> Identificação</h3>
+                                        <div class="detail-grid">
+                                            <div class="detail-item">
+                                                <label>User ID:</label>
+                                                <span><?= htmlspecialchars($userData['userId']) ?></span>
+                                            </div>
+                                            <?php if ($userData['firstSeen']): ?>
+                                            <div class="detail-item">
+                                                <label>Primeiro acesso:</label>
+                                                <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if ($userData['lastSeen']): ?>
+                                            <div class="detail-item">
+                                                <label>Último acesso:</label>
+                                                <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
+                                            </div>
+                                            <?php endif; ?>
                                         </div>
-                                        <?php if ($userData['firstSeen']): ?>
-                                        <div class="detail-item">
-                                            <label>Primeiro acesso:</label>
-                                            <span><?= date('d/m/Y H:i:s', (int)$userData['firstSeen']) ?></span>
-                                        </div>
-                                        <?php endif; ?>
-                                        <?php if ($userData['lastSeen']): ?>
-                                        <div class="detail-item">
-                                            <label>Último acesso:</label>
-                                            <span><?= date('d/m/Y H:i:s', (int)$userData['lastSeen']) ?></span>
-                                        </div>
-                                        <?php endif; ?>
                                     </div>
+
+                                    <!-- Estatísticas -->
+                                    <div class="detail-section">
+                                        <h3><i class="fas fa-chart-bar"></i> Estatísticas</h3>
+                                        <div class="detail-grid">
+                                            <div class="detail-item">
+                                                <label>Total de sessões:</label>
+                                                <span><?= count($userData['allSessions']) ?></span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <label>Total de screenshots:</label>
+                                                <span><?= number_format($userData['totalScreenshots']) ?></span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <label>Total de eventos:</label>
+                                                <span><?= number_format($userData['totalEvents']) ?></span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Dados do App -->
+                                    <?php if (!empty($userData['latestInfo']['userData'])): ?>
+                                    <div class="detail-section">
+                                        <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
+                                        <div class="detail-grid">
+                                            <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
+                                            <div class="detail-item">
+                                                <label><?= htmlspecialchars($key) ?>:</label>
+                                                <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <?php else: ?>
+                                    <!-- Placeholder quando não há dados do app -->
+                                    <div class="detail-section detail-section-empty">
+                                        <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
+                                        <div class="detail-grid">
+                                            <div class="empty-data">
+                                                <p>Nenhum dado disponível</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <?php endif; ?>
+
+                                    <!-- Localização -->
+                                    <?php if (!empty($userData['geoData'])): ?>
+                                    <div class="detail-section">
+                                        <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
+                                        <div class="detail-grid">
+                                            <?php if (!empty($userData['geoData']['country'])): ?>
+                                            <div class="detail-item">
+                                                <label>País:</label>
+                                                <span>
+                                                    <?php if (!empty($userData['geoData']['flag'])): ?>
+                                                        <?= $userData['geoData']['flag'] ?> 
+                                                    <?php endif; ?>
+                                                    <?= htmlspecialchars($userData['geoData']['country']) ?>
+                                                </span>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($userData['geoData']['region'])): ?>
+                                            <div class="detail-item">
+                                                <label>Estado/Região:</label>
+                                                <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($userData['geoData']['city'])): ?>
+                                            <div class="detail-item">
+                                                <label>Cidade:</label>
+                                                <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($userData['geoData']['ip'])): ?>
+                                            <div class="detail-item">
+                                                <label>IP:</label>
+                                                <span><?= htmlspecialchars($userData['geoData']['ip']) ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <?php else: ?>
+                                    <!-- Placeholder quando não há dados de localização -->
+                                    <div class="detail-section detail-section-empty">
+                                        <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
+                                        <div class="detail-grid">
+                                            <div class="empty-data">
+                                                <p>Localização não disponível</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
 
-                                <!-- Estatísticas -->
-                                <div class="detail-section">
-                                    <h3><i class="fas fa-chart-bar"></i> Estatísticas</h3>
-                                    <div class="detail-grid">
-                                        <div class="detail-item">
-                                            <label>Total de sessões:</label>
-                                            <span><?= count($userData['allSessions']) ?></span>
+                                <!-- Coluna Direita: Abas de Conteúdo -->
+                                <div class="user-tabs-container">
+                                    <div class="tabs-container">
+                                        <div class="tabs-header">
+                                            <button class="tab-btn active" onclick="showTab('timeline')">
+                                                <i class="fas fa-history"></i> Linha do Tempo (<?= $userData['totalEvents'] ?>)
+                                            </button>
+                                            <button class="tab-btn" onclick="showTab('videos')">
+                                                <i class="fas fa-film"></i> Vídeos (<?= $userData['totalVideos'] ?>)
+                                            </button>
+                                            <button class="tab-btn" onclick="showTab('sessions')">
+                                                <i class="fas fa-camera"></i> Screenshots (<?= count($userData['allSessions']) ?>)
+                                            </button>
                                         </div>
-                                        <div class="detail-item">
-                                            <label>Total de screenshots:</label>
-                                            <span><?= number_format($userData['totalScreenshots']) ?></span>
-                                        </div>
-                                        <div class="detail-item">
-                                            <label>Total de eventos:</label>
-                                            <span><?= number_format($userData['totalEvents']) ?></span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Dados do App -->
-                                <?php if (!empty($userData['latestInfo']['userData'])): ?>
-                                <div class="detail-section">
-                                    <h3><i class="fas fa-mobile-alt"></i> Dados do App</h3>
-                                    <div class="detail-grid">
-                                        <?php foreach ($userData['latestInfo']['userData'] as $key => $value): ?>
-                                        <div class="detail-item">
-                                            <label><?= htmlspecialchars($key) ?>:</label>
-                                            <span><?= htmlspecialchars(is_array($value) ? json_encode($value) : $value) ?></span>
-                                        </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                                <?php endif; ?>
-
-                                <!-- Localização -->
-                                <?php if (!empty($userData['geoData'])): ?>
-                                <div class="detail-section">
-                                    <h3><i class="fas fa-map-marker-alt"></i> Localização</h3>
-                                    <div class="detail-grid">
-                                        <?php if (!empty($userData['geoData']['city'])): ?>
-                                        <div class="detail-item">
-                                            <label>Cidade:</label>
-                                            <span><?= htmlspecialchars($userData['geoData']['city']) ?></span>
-                                        </div>
-                                        <?php endif; ?>
-                                        <?php if (!empty($userData['geoData']['region'])): ?>
-                                        <div class="detail-item">
-                                            <label>Estado:</label>
-                                            <span><?= htmlspecialchars($userData['geoData']['region']) ?></span>
-                                        </div>
-                                        <?php endif; ?>
-                                        <?php if (!empty($userData['geoData']['country_name'])): ?>
-                                        <div class="detail-item">
-                                            <label>País:</label>
-                                            <span><?= htmlspecialchars($userData['geoData']['country_name']) ?></span>
-                                        </div>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                                <?php endif; ?>
-                            </div>
-
-                            <!-- Abas de Conteúdo -->
-                            <div class="detail-section">
-                                <div class="tabs-container">
-                                    <div class="tabs-header">
-                                        <button class="tab-btn active" onclick="showTab('timeline')">
-                                            <i class="fas fa-history"></i> Linha do Tempo (<?= $userData['totalEvents'] ?>)
-                                        </button>
-                                        <button class="tab-btn" onclick="showTab('videos')">
-                                            <i class="fas fa-film"></i> Vídeos (<?= $userData['totalVideos'] ?>)
-                                        </button>
-                                        <button class="tab-btn" onclick="showTab('sessions')">
-                                            <i class="fas fa-camera"></i> Screenshots (<?= count($userData['allSessions']) ?>)
-                                        </button>
-                                    </div>
-                                    
-                                    <!-- Aba Linha do Tempo -->
-                                    <div id="timeline-tab" class="tab-content active">
-                                        <h3><i class="fas fa-history"></i> Linha do Tempo de Eventos</h3>
-                                        <?php if (!empty($userData['timeline'])): ?>
-                                        <div class="timeline-container">
-                                            <?php foreach ($userData['timeline'] as $date => $dayEvents): ?>
-                                            <div class="timeline-day">
-                                                <div class="timeline-date">
-                                                    <i class="fas fa-calendar-day"></i>
-                                                    <?= date('d/m/Y', strtotime($date)) ?>
-                                                    <span class="events-count"><?= count($dayEvents) ?> eventos</span>
-                                                </div>
-                                                
-                                                <div class="timeline-horizontal">
-                                                    <div class="timeline-line"></div>
-                                                    <?php foreach ($dayEvents as $index => $event): ?>
-                                                    <div class="timeline-event" style="left: <?= ($index / count($dayEvents)) * 100 ?>%">
-                                                        <div class="event-marker">
-                                                            <i class="fas fa-circle"></i>
+                                        
+                                        <!-- Aba Linha do Tempo -->
+                                        <div id="timeline-tab" class="tab-content active">
+                                            <h3><i class="fas fa-history"></i> Linha do Tempo de Eventos</h3>
+                                            <?php if (!empty($userData['timeline'])): ?>
+                                            <div class="timeline-container">
+                                                <?php foreach ($userData['timeline'] as $date => $dayEvents): ?>
+                                                <div class="timeline-day">
+                                                    <div class="timeline-date">
+                                                        <i class="fas fa-calendar-day"></i>
+                                                        <?= date('d/m/Y', strtotime($date)) ?>
+                                                        <span class="events-count"><?= count($dayEvents) ?> eventos</span>
+                                                    </div>
+                                                    
+                                                    <div class="timeline-horizontal">
+                                                        <div class="timeline-line"></div>
+                                                        <?php foreach ($dayEvents as $index => $event): ?>
+                                                        <div class="timeline-event" style="left: <?= ($index / count($dayEvents)) * 100 ?>%">
+                                                            <div class="event-marker">
+                                                                <i class="fas fa-circle"></i>
+                                                            </div>
+                                                            <div class="event-popup">
+                                                                <div class="event-time">
+                                                                    <i class="fas fa-clock"></i>
+                                                                    <?= $event['time'] ?>
+                                                                </div>
+                                                                <div class="event-name">
+                                                                    <i class="fas fa-tag"></i>
+                                                                    <?= htmlspecialchars($event['event']) ?>
+                                                                </div>
+                                                                <?php if (!empty($event['value'])): ?>
+                                                                <div class="event-value">
+                                                                    <i class="fas fa-info-circle"></i>
+                                                                    <?= htmlspecialchars($event['value']) ?>
+                                                                </div>
+                                                                <?php endif; ?>
+                                                                <?php if (!empty($event['geo']) && !empty($event['geo']['flag']) && (!isset($event['geo']['error']) || $event['geo']['country'] !== 'Unknown')): ?>
+                                                                <div class="event-location">
+                                                                    <i class="fas fa-globe"></i>
+                                                                    <?= $event['geo']['flag'] ?> 
+                                                                    <?php if (!empty($event['geo']['country']) && $event['geo']['country'] !== 'Unknown'): ?>
+                                                                        <?= htmlspecialchars($event['geo']['country']) ?>
+                                                                        <?php if (!empty($event['geo']['city']) && $event['geo']['city'] !== 'Unknown'): ?>
+                                                                            , <?= htmlspecialchars($event['geo']['city']) ?>
+                                                                        <?php endif; ?>
+                                                                    <?php else: ?>
+                                                                        <?= htmlspecialchars($event['geo']['city'] ?? 'Localização indisponível') ?>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                                <?php endif; ?>
+                                                            </div>
                                                         </div>
-                                                        <div class="event-popup">
-                                                            <div class="event-time">
-                                                                <i class="fas fa-clock"></i>
-                                                                <?= $event['time'] ?>
-                                                            </div>
-                                                            <div class="event-name">
-                                                                <i class="fas fa-tag"></i>
-                                                                <?= htmlspecialchars($event['event']) ?>
-                                                            </div>
-                                                            <?php if (!empty($event['value'])): ?>
-                                                            <div class="event-value">
-                                                                <i class="fas fa-info-circle"></i>
-                                                                <?= htmlspecialchars($event['value']) ?>
-                                                            </div>
-                                                            <?php endif; ?>
-                                                            <?php if (!empty($event['geo']['flag'])): ?>
-                                                            <div class="event-location">
-                                                                <i class="fas fa-map-marker-alt"></i>
-                                                                <?= $event['geo']['flag'] ?> <?= htmlspecialchars($event['geo']['city'] ?? 'Unknown') ?>
-                                                            </div>
-                                                            <?php endif; ?>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <?php else: ?>
+                                            <div class="empty-timeline">
+                                                <i class="fas fa-history"></i>
+                                                <h4>Nenhum evento registrado</h4>
+                                                <p>Os eventos do usuário aparecerão aqui quando forem capturados pelo app.</p>
+                                            </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        
+                                        <!-- Aba Vídeos -->
+                                        <div id="videos-tab" class="tab-content">
+                                            <h3><i class="fas fa-film"></i> Sessões Gravadas</h3>
+                                            <?php if (!empty($userData['allVideos'])): ?>
+                                            <div class="videos-grid">
+                                                <?php foreach ($userData['allVideos'] as $video): ?>
+                                                <div class="video-card">
+                                                    <div class="video-thumbnail">
+                                                        <video preload="none" poster="">
+                                                            <source src="<?= htmlspecialchars($video['path']) ?>" type="video/mp4">
+                                                        </video>
+                                                        <div class="video-overlay">
+                                                            <button class="play-video-btn" onclick="playVideo('<?= htmlspecialchars($video['path']) ?>')">
+                                                                <i class="fas fa-play"></i>
+                                                            </button>
+                                                        </div>
+                                                        <div class="video-duration">
+                                                            <i class="fas fa-clock"></i>
+                                                            <?php 
+                                                            if ($video['sessionDuration'] > 0) {
+                                                                $duration = $video['sessionDuration'];
+                                                                echo sprintf('%02d:%02d', floor($duration / 60), $duration % 60);
+                                                            } else {
+                                                                echo '00:00';
+                                                            }
+                                                            ?>
+                                                        </div>
+                                                        <?php if ($video['sessionId']): ?>
+                                                        <div class="session-id">
+                                                            <i class="fas fa-tag"></i>
+                                                            <?= substr($video['sessionId'], 0, 8) ?>...
+                                                        </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="video-info">
+                                                        <h4><?= date('d/m/Y H:i', $video['timestamp']) ?></h4>
+                                                        <p><i class="fas fa-hdd"></i> <?= number_format($video['size'] / 1024 / 1024, 1) ?> MB</p>
+                                                        
+                                                        <?php if ($video['sessionDuration'] > 0): ?>
+                                                        <p><i class="fas fa-stopwatch"></i> <?= number_format($video['sessionDuration'], 1) ?>s sessão</p>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($video['frameCount'] > 0): ?>
+                                                        <p><i class="fas fa-images"></i> <?= $video['frameCount'] ?> frames (<?= $video['actualFrames'] ?> real)</p>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($video['effectiveFPS'] > 0): ?>
+                                                        <p><i class="fas fa-tachometer-alt"></i> <?= $video['effectiveFPS'] ?> FPS efetivo</p>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($video['compressionRatio'] > 0): ?>
+                                                        <p><i class="fas fa-compress"></i> <?= $video['compressionRatio'] ?>% compressão</p>
+                                                        <?php endif; ?>
+                                                        
+                                                        <?php if ($video['platform'] !== 'unknown'): ?>
+                                                        <p><i class="fas fa-mobile-alt"></i> <?= ucfirst($video['platform']) ?> <?= $video['appVersion'] ?></p>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <?php else: ?>
+                                            <div class="empty-videos">
+                                                <i class="fas fa-film"></i>
+                                                <h4>Nenhuma sessão gravada</h4>
+                                                <p>As sessões de vídeo aparecerão aqui quando o app for para background.</p>
+                                            </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        
+                                        <!-- Aba Sessões (Screenshots) -->
+                                        <div id="sessions-tab" class="tab-content">
+                                            <h3><i class="fas fa-camera"></i> Sessões de Screenshots</h3>
+                                            <?php if (!empty($userSessions)): ?>
+                                            <div class="sessions-grid">
+                                                <?php foreach ($userSessions as $session): ?>
+                                                <div class="session-card">
+                                                    <div class="session-thumbnail">
+                                                        <?php if ($session['firstScreenshot']): ?>
+                                                        <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
+                                                             alt="Session thumbnail" loading="lazy">
+                                                        <?php else: ?>
+                                                        <div class="no-thumbnail">
+                                                            <i class="fas fa-image"></i>
+                                                        </div>
+                                                        <?php endif; ?>
+                                                        <div class="session-overlay">
+                                                            <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
+                                                                <i class="fas fa-play"></i>
+                                                            </button>
                                                         </div>
                                                     </div>
-                                                    <?php endforeach; ?>
+                                                    <div class="session-info">
+                                                        <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
+                                                        <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
+                                                        <?php if (!empty($session['metadata']['timestamp'])): ?>
+                                                        <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
+                                                        <?php endif; ?>
+                                                    </div>
                                                 </div>
+                                                <?php endforeach; ?>
                                             </div>
-                                            <?php endforeach; ?>
-                                        </div>
-                                        <?php else: ?>
-                                        <div class="empty-timeline">
-                                            <i class="fas fa-history"></i>
-                                            <h4>Nenhum evento registrado</h4>
-                                            <p>Os eventos do usuário aparecerão aqui quando forem capturados pelo app.</p>
-                                        </div>
-                                        <?php endif; ?>
-                                    </div>
-                                    
-                                    <!-- Aba Vídeos -->
-                                    <div id="videos-tab" class="tab-content">
-                                        <h3><i class="fas fa-film"></i> Sessões Gravadas</h3>
-                                        <?php if (!empty($userData['allVideos'])): ?>
-                                        <div class="videos-grid">
-                                            <?php foreach ($userData['allVideos'] as $video): ?>
-                                            <div class="video-card">
-                                                <div class="video-thumbnail">
-                                                    <video preload="none" poster="">
-                                                        <source src="<?= htmlspecialchars($video['path']) ?>" type="video/mp4">
-                                                    </video>
-                                                    <div class="video-overlay">
-                                                        <button class="play-video-btn" onclick="playVideo('<?= htmlspecialchars($video['path']) ?>')">
-                                                            <i class="fas fa-play"></i>
-                                                        </button>
-                                                    </div>
-                                                    <div class="video-duration">
-                                                        <i class="fas fa-clock"></i>
-                                                        <?php 
-                                                        if ($video['sessionDuration'] > 0) {
-                                                            $duration = $video['sessionDuration'];
-                                                            echo sprintf('%02d:%02d', floor($duration / 60), $duration % 60);
-                                                        } else {
-                                                            echo '00:00';
-                                                        }
-                                                        ?>
-                                                    </div>
-                                                    <?php if ($video['sessionId']): ?>
-                                                    <div class="session-id">
-                                                        <i class="fas fa-tag"></i>
-                                                        <?= substr($video['sessionId'], 0, 8) ?>...
-                                                    </div>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <div class="video-info">
-                                                    <h4><?= date('d/m/Y H:i', $video['timestamp']) ?></h4>
-                                                    <p><i class="fas fa-hdd"></i> <?= number_format($video['size'] / 1024 / 1024, 1) ?> MB</p>
-                                                    
-                                                    <?php if ($video['sessionDuration'] > 0): ?>
-                                                    <p><i class="fas fa-stopwatch"></i> <?= number_format($video['sessionDuration'], 1) ?>s sessão</p>
-                                                    <?php endif; ?>
-                                                    
-                                                    <?php if ($video['frameCount'] > 0): ?>
-                                                    <p><i class="fas fa-images"></i> <?= $video['frameCount'] ?> frames (<?= $video['actualFrames'] ?> real)</p>
-                                                    <?php endif; ?>
-                                                    
-                                                    <?php if ($video['effectiveFPS'] > 0): ?>
-                                                    <p><i class="fas fa-tachometer-alt"></i> <?= $video['effectiveFPS'] ?> FPS efetivo</p>
-                                                    <?php endif; ?>
-                                                    
-                                                    <?php if ($video['compressionRatio'] > 0): ?>
-                                                    <p><i class="fas fa-compress"></i> <?= $video['compressionRatio'] ?>% compressão</p>
-                                                    <?php endif; ?>
-                                                    
-                                                    <?php if ($video['platform'] !== 'unknown'): ?>
-                                                    <p><i class="fas fa-mobile-alt"></i> <?= ucfirst($video['platform']) ?> <?= $video['appVersion'] ?></p>
-                                                    <?php endif; ?>
-                                                </div>
+                                            <?php else: ?>
+                                            <div class="empty-sessions">
+                                                <i class="fas fa-camera"></i>
+                                                <h4>Nenhuma sessão encontrada</h4>
+                                                <p>As sessões de screenshot aparecerão aqui quando forem capturadas.</p>
                                             </div>
-                                            <?php endforeach; ?>
+                                            <?php endif; ?>
                                         </div>
-                                        <?php else: ?>
-                                        <div class="empty-videos">
-                                            <i class="fas fa-film"></i>
-                                            <h4>Nenhuma sessão gravada</h4>
-                                            <p>As sessões de vídeo aparecerão aqui quando o app for para background.</p>
-                                        </div>
-                                        <?php endif; ?>
-                                    </div>
-                                    
-                                    <!-- Aba Sessões (Screenshots) -->
-                                    <div id="sessions-tab" class="tab-content">
-                                        <h3><i class="fas fa-camera"></i> Sessões de Screenshots</h3>
-                                        <?php if (!empty($userSessions)): ?>
-                                        <div class="sessions-grid">
-                                            <?php foreach ($userSessions as $session): ?>
-                                            <div class="session-card">
-                                                <div class="session-thumbnail">
-                                                    <?php if ($session['firstScreenshot']): ?>
-                                                    <img src="view-screenshot.php?user=<?= urlencode($selectedUser) ?>&date=<?= urlencode($session['date']) ?>&file=<?= urlencode($session['firstScreenshot']) ?>" 
-                                                         alt="Session thumbnail" loading="lazy">
-                                                    <?php else: ?>
-                                                    <div class="no-thumbnail">
-                                                        <i class="fas fa-image"></i>
-                                                    </div>
-                                                    <?php endif; ?>
-                                                    <div class="session-overlay">
-                                                        <button class="play-btn" onclick="playSession('<?= $selectedUser ?>', '<?= $session['date'] ?>')">
-                                                            <i class="fas fa-play"></i>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div class="session-info">
-                                                    <h3><?= date('d/m/Y', strtotime($session['date'])) ?></h3>
-                                                    <p><i class="fas fa-camera"></i> <?= $session['screenshotCount'] ?> screenshots</p>
-                                                    <?php if (!empty($session['metadata']['timestamp'])): ?>
-                                                    <p><i class="fas fa-clock"></i> <?= date('H:i', (int)$session['metadata']['timestamp']) ?></p>
-                                                    <?php endif; ?>
-                                                </div>
-                                            </div>
-                                            <?php endforeach; ?>
-                                        </div>
-                                        <?php else: ?>
-                                        <div class="empty-sessions">
-                                            <i class="fas fa-camera"></i>
-                                            <h4>Nenhuma sessão encontrada</h4>
-                                            <p>As sessões de screenshot aparecerão aqui quando forem capturadas.</p>
-                                        </div>
-                                        <?php endif; ?>
                                     </div>
                                 </div>
                             </div>
@@ -1374,20 +1422,47 @@ $screenSizeOptions = [
                 event.addEventListener('mouseenter', function() {
                     popup.style.display = 'block';
                     
-                    // Posicionar popup para não sair da tela
-                    const rect = popup.getBoundingClientRect();
-                    const viewportWidth = window.innerWidth;
-                    
-                    if (rect.right > viewportWidth) {
-                        popup.style.left = 'auto';
-                        popup.style.right = '0';
-                    }
+                    // Aguardar um frame para obter dimensões corretas
+                    requestAnimationFrame(() => {
+                        const rect = popup.getBoundingClientRect();
+                        const viewportWidth = window.innerWidth;
+                        const timelineContainer = popup.closest('.timeline-container');
+                        const containerRect = timelineContainer ? timelineContainer.getBoundingClientRect() : null;
+                        
+                        // Reset posicionamento
+                        popup.style.left = '50%';
+                        popup.style.right = 'auto';
+                        popup.style.transform = 'translateX(-50%)';
+                        
+                        // Verificar se está saindo pela direita
+                        if (rect.right > viewportWidth - 20) {
+                            popup.style.left = 'auto';
+                            popup.style.right = '0';
+                            popup.style.transform = 'none';
+                        }
+                        
+                        // Verificar se está saindo pela esquerda
+                        if (rect.left < 20) {
+                            popup.style.left = '0';
+                            popup.style.right = 'auto';
+                            popup.style.transform = 'none';
+                        }
+                        
+                        // Se o container tiver scroll, ajustar também
+                        if (containerRect && rect.right > containerRect.right - 20) {
+                            popup.style.left = 'auto';
+                            popup.style.right = '0';
+                            popup.style.transform = 'none';
+                        }
+                    });
                 });
                 
                 event.addEventListener('mouseleave', function() {
                     popup.style.display = 'none';
+                    // Reset para posição padrão
                     popup.style.left = '50%';
                     popup.style.right = 'auto';
+                    popup.style.transform = 'translateX(-50%)';
                 });
             });
             
