@@ -25,20 +25,34 @@ function deleteDirectory($dir) {
 
 function clearDirectoryContents($dir) {
     if (!is_dir($dir)) {
+        logMessage("   ⚠️ Diretório não existe: $dir");
         return false;
     }
     
+    logMessage("   🔍 Escaneando diretório: $dir");
     $files = array_diff(scandir($dir), array('.', '..'));
+    $deletedCount = 0;
     
     foreach ($files as $file) {
         $filePath = $dir . '/' . $file;
         if (is_dir($filePath)) {
-            deleteDirectory($filePath);
+            logMessage("   📁 Removendo subdiretório: $file");
+            if (deleteDirectory($filePath)) {
+                $deletedCount++;
+            } else {
+                logMessage("   ❌ Erro ao remover: $file");
+            }
         } else {
-            unlink($filePath);
+            logMessage("   📄 Removendo arquivo: $file");
+            if (unlink($filePath)) {
+                $deletedCount++;
+            } else {
+                logMessage("   ❌ Erro ao remover arquivo: $file");
+            }
         }
     }
     
+    logMessage("   ✅ Removidos: $deletedCount itens");
     return true;
 }
 
@@ -75,10 +89,11 @@ if (!$isCLI) {
                 <ul>
                     <li>Todos os usuários</li>
                     <li>Todos os eventos</li>
-                    <li>Todas as gravações</li>
-                    <li>Todos os vídeos</li>
+                    <li>Screenshots de eventos</li>
+                    <li>Screenshots de sessão e manuais</li>
+                    <li>Todas as gravações/vídeos</li>
                     <li>Todos os logs</li>
-                    <li>Dados temporários</li>
+                    <li>Cache e dados temporários</li>
                 </ul>
                 <p><strong>Esta ação NÃO PODE ser desfeita!</strong></p>
             </div>
@@ -96,15 +111,54 @@ if (!$isCLI) {
 
 logMessage("🧹 Iniciando limpeza completa dos dados...");
 
+// Mostrar status atual do sistema
+logMessage("📊 Status atual do sistema:");
+logMessage("🗂️ Diretório base: $baseDir");
+
+if (!is_dir($baseDir)) {
+    logMessage("❌ ERRO: Diretório base não existe!");
+    if (!$isCLI) {
+        echo "❌ ERRO: Diretório base não existe: $baseDir";
+    }
+    exit(1);
+}
+
 // Diretórios para limpar
 $directories = [
     'users' => $baseDir . '/users',
     'events' => $baseDir . '/events', 
+    'events-screenshots' => $baseDir . '/events-screenshots',
     'screenshots' => $baseDir . '/screenshots',
     'videos' => $baseDir . '/videos',
     'logs' => $baseDir . '/logs',
-    'temp' => $baseDir . '/temp'
+    'temp' => $baseDir . '/temp',
+    'cache' => $baseDir . '/cache'
 ];
+
+// Verificar o que existe atualmente
+logMessage("📋 Verificando diretórios existentes:");
+foreach ($directories as $name => $path) {
+    if (is_dir($path)) {
+        $fileCount = 0;
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        
+        foreach ($iterator as $file) {
+            if ($file->isFile()) {
+                $fileCount++;
+            }
+        }
+        
+        logMessage("   ✅ $name: $fileCount arquivos");
+    } else {
+        logMessage("   ❌ $name: não existe");
+    }
+}
+
+logMessage("");
+logMessage("🔄 Iniciando processo de limpeza...");
 
 $totalDeleted = 0;
 

@@ -67,6 +67,10 @@ switch (true) {
         handleInit($data);
         break;
     
+    case $uri === '/take-screenshot':
+        handleTakeScreenshot($data);
+        break;
+    
     case $uri === '/' || $uri === '/status':
         handleStatus();
         break;
@@ -477,6 +481,78 @@ function handleInit($data) {
     ]);
 }
 
+// Handler para screenshots manuais
+function handleTakeScreenshot($data) {
+    global $baseDir;
+    
+    if (!$data || !isset($data['userId']) || !isset($data['screenshotData'])) {
+        jsonResponse(['error' => 'Invalid data or missing screenshot'], 400);
+    }
+    
+    $userId = $data['userId'];
+    $screenshotBase64 = $data['screenshotData'];
+    $width = $data['width'] ?? 'unknown';
+    $height = $data['height'] ?? 'unknown';
+    $compression = $data['compression'] ?? 0.8;
+    $timestamp = $data['timestamp'] ?? time();
+    $date = date('Y-m-d', (int)$timestamp);
+    $type = $data['type'] ?? 'manual';
+    
+    // Decodificar screenshot
+    $screenshotData = base64_decode($screenshotBase64);
+    if ($screenshotData === false) {
+        jsonResponse(['error' => 'Invalid base64 screenshot data'], 400);
+    }
+    
+    // Buscar dados geográficos pelo IP do usuário
+    $geoData = fetchGeoInfo();
+    
+    // Salvar na pasta screenshots (mesma dos screenshots de sessão) para aparecer na aba Screenshots
+    $screenshotsDir = $baseDir . '/screenshots/' . $userId . '/' . $date;
+    ensureDir($screenshotsDir);
+    
+    // Nome do arquivo incluindo tipo manual
+    $screenshotFilename = 'manual_screenshot_' . (int)$timestamp . '_' . $width . 'x' . $height . '.jpg';
+    $screenshotPath = $screenshotsDir . '/' . $screenshotFilename;
+    
+    if (file_put_contents($screenshotPath, $screenshotData)) {
+        $screenshotSize = strlen($screenshotData);
+        saveLog("📸 Screenshot manual salvo: $screenshotFilename (" . formatBytes($screenshotSize) . ")");
+        
+        // Salvar metadados do screenshot manual na mesma pasta
+        $metadata = [
+            'userId' => $userId,
+            'type' => 'manual_screenshot',
+            'timestamp' => (int)$timestamp,
+            'width' => $width,
+            'height' => $height,
+            'compression' => $compression,
+            'size' => $screenshotSize,
+            'filename' => $screenshotFilename,
+            'geo' => $geoData,
+            'userData' => $data['userData'] ?? [],
+            'receivedAt' => time(),
+            'isManual' => true
+        ];
+        
+        $metadataFile = $screenshotsDir . '/metadata_manual_' . (int)$timestamp . '.json';
+        file_put_contents($metadataFile, json_encode($metadata, JSON_PRETTY_PRINT));
+        
+        jsonResponse([
+            'success' => true,
+            'message' => 'Screenshot manual salvo com sucesso',
+            'filename' => $screenshotFilename,
+            'size' => formatBytes($screenshotSize),
+            'dimensions' => $width . 'x' . $height,
+            'compression' => $compression,
+            'savedTo' => 'screenshots'
+        ]);
+    } else {
+        saveLog("❌ Erro ao salvar screenshot manual");
+        jsonResponse(['error' => 'Failed to save screenshot'], 500);
+    }
+}
+
 // Handler para status
 function handleStatus() {
     global $baseDir;
@@ -516,25 +592,77 @@ function handleDeleteUser() {
     }
     
     $userId = $_GET['userId'];
+    $deletedDirs = [];
+    $totalSize = 0;
+    
+    // Lista de todas as pastas que contém dados do usuário
+    $userDirectories = [
+        'screenshots' => 'Screenshots de sessão e manuais',
+        'events' => 'Eventos',
+        'events-screenshots' => 'Screenshots de eventos',
+        'videos' => 'Vídeos de sessão',
+        'users' => 'Informações do usuário'
+    ];
     
     // Deletar todos os dados do usuário
-    $userDir = $baseDir . '/screenshots/' . $userId;
-    if (is_dir($userDir)) {
-        deleteDir($userDir);
+    foreach ($userDirectories as $dirName => $description) {
+        $userDir = $baseDir . '/' . $dirName . '/' . $userId;
+        
+        if (is_dir($userDir)) {
+            // Calcular tamanho antes de deletar
+            $dirSize = getDirSize($userDir);
+            $totalSize += $dirSize;
+            
+            // Deletar diretório
+            deleteDir($userDir);
+            $deletedDirs[] = [
+                'type' => $description,
+                'path' => $dirName . '/' . $userId,
+                'size' => formatBytes($dirSize)
+            ];
+            
+            saveLog("🗑️ Deletado: $description ($dirName/$userId) - " . formatBytes($dirSize));
+        }
     }
     
-    $userDir = $baseDir . '/events/' . $userId;
-    if (is_dir($userDir)) {
-        deleteDir($userDir);
+    if (empty($deletedDirs)) {
+        saveLog("⚠️ Nenhum dado encontrado para o usuário: $userId");
+        jsonResponse([
+            'success' => true,
+            'message' => 'Usuário não tinha dados para deletar',
+            'userId' => $userId,
+            'deletedDirs' => [],
+            'totalSize' => formatBytes(0)
+        ]);
+    } else {
+        saveLog("✅ Usuário $userId deletado completamente - Total: " . formatBytes($totalSize));
+        jsonResponse([
+            'success' => true,
+            'message' => 'Todos os dados do usuário foram deletados com sucesso',
+            'userId' => $userId,
+            'deletedDirs' => $deletedDirs,
+            'totalSize' => formatBytes($totalSize)
+        ]);
+    }
+}
+
+// Função auxiliar para calcular tamanho de um diretório
+function getDirSize($dir) {
+    $size = 0;
+    
+    if (is_dir($dir)) {
+        $files = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        
+        foreach ($files as $file) {
+            if ($file->isFile()) {
+                $size += $file->getSize();
+            }
+        }
     }
     
-    $userDir = $baseDir . '/users/' . $userId;
-    if (is_dir($userDir)) {
-        deleteDir($userDir);
-    }
-    
-    saveLog("User $userId data deleted");
-    jsonResponse(['success' => true]);
+    return $size;
 }
 
 // Função auxiliar para deletar um diretório e seu conteúdo
@@ -1186,6 +1314,7 @@ function mapDeviceIdentifier($identifier) {
 
 // Função para processar dados de dispositivo
 function processDeviceInfo($userData) {
+    // Processar identificador do dispositivo
     if (isset($userData['device'])) {
         // Extrair identificador do formato "x86_64 (iOS Simulator)" -> "x86_64"
         $deviceString = $userData['device'];
@@ -1209,6 +1338,48 @@ function processDeviceInfo($userData) {
             $userData['device'] = $identifier;
             $userData['deviceIdentifier'] = $identifier;
             $userData['deviceCommercialName'] = $identifier;
+        }
+    }
+    
+    // Processar informações da tela
+    if (isset($userData['screenSize'])) {
+        $userData['screenResolution'] = $userData['screenSize'];
+    }
+    
+    // Processar profundidade de cor
+    if (isset($userData['depth'])) {
+        $userData['colorDepth'] = $userData['depth'] . ' bits';
+    }
+    
+    // Processar tamanho da fonte
+    if (isset($userData['fontSize'])) {
+        $userData['systemFontSize'] = $userData['fontSize'];
+    }
+    
+    // Processar idioma do usuário
+    if (isset($userData['userLanguage'])) {
+        $userData['deviceLanguage'] = $userData['userLanguage'];
+    }
+    
+    // Processar país e região (formato: EN-US, PT-BR)
+    if (isset($userData['country'])) {
+        $countryRegion = $userData['country'];
+        
+        // Separar idioma e país
+        if (preg_match('/^([A-Z]{2})-([A-Z]{2})$/', $countryRegion, $matches)) {
+            $languageCode = $matches[1];
+            $countryCode = $matches[2];
+            
+            $userData['locale'] = $countryRegion;
+            $userData['languageCode'] = $languageCode;
+            $userData['countryCode'] = $countryCode;
+            $userData['regionInfo'] = [
+                'language' => $languageCode,
+                'country' => $countryCode,
+                'locale' => $countryRegion
+            ];
+        } else {
+            $userData['locale'] = $countryRegion;
         }
     }
     

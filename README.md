@@ -1,215 +1,369 @@
 # Expo Analytics
 
-Sistema completo de analytics para aplicativos React Native/Expo com captura de screenshots, rastreamento de eventos e dashboard web interativo.
+Sistema completo de analytics para aplicações React Native/Expo com captura de screenshots, gravação de sessões e dashboard web.
 
-## 🆕 Novidades - Sistema de Gestão de Aplicativos
+## 🚀 Funcionalidades
 
-### Gestão Centralizada de Apps
-- **Dashboard de Apps**: Interface para cadastrar e gerenciar múltiplos aplicativos
-- **Configurações por App**: Cada aplicativo possui configurações independentes
-- **Controle Remoto**: Configurações são buscadas automaticamente pelo app
+### ✨ Novas Funcionalidades Implementadas
+- **📸 Screenshots Manuais**: Captura screenshots com parâmetros customizáveis (largura, altura, compressão)
+- **📱 Informações Detalhadas do Dispositivo**: 
+  - Resolução da tela (widthxheight)
+  - Profundidade de cor (depth)
+  - Tamanho da fonte do sistema
+  - Idioma do usuário
+  - País e região (ex: EN-US, PT-BR)
+- **🌐 API Aprimorada**: Novos endpoints para processar screenshots manuais
 
-### Configurações Disponíveis
+### Funcionalidades Core
+- **📱 Captura Automática de Screenshots**: Screenshots automáticos durante eventos
+- **🎬 Gravação de Sessões**: Converte screenshots em vídeos MP4
+- **📊 Dashboard Web**: Interface completa para visualizar dados e sessões
+- **🌍 Geolocalização**: Dados geográficos automáticos baseados em IP
+- **⚙️ Configuração Dinâmica**: Configurações via servidor por Bundle ID
+- **🔄 Auto-cadastro**: Usuários são cadastrados automaticamente
 
-#### Record Screen
-- **Ativar/Desativar**: Controla se o app deve capturar screenshots
-- **Aplicação**: Se desabilitado, o app não inicia a gravação mesmo chamando `start()`
+## 📦 Instalação
 
-#### Framerate (quando Record Screen ativo)
-- **Range**: 1 a 30 fps
-- **Controle**: Slider para ajuste fino da qualidade vs performance
+```bash
+# Instalar o pacote
+npm install expo-analytics
 
-#### Screen Size (quando Record Screen ativo)
-- **Opções**: 320px a 960px (largura)
-- **Proporção**: Mantém automaticamente proporção 1:2 (largura:altura)
-- **Otimização**: Permite ajustar qualidade e tamanho dos uploads
+# ou com Yarn
+yarn add expo-analytics
+```
 
-## 🚀 Como Usar
+## 🛠️ Configuração Básica
 
-### 1. Cadastrar Aplicativo no Dashboard
-
-1. Acesse o dashboard: `http://localhost:8080/dashboard`
-2. Clique em "Novo Aplicativo"
-3. Preencha:
-   - **Nome**: Nome amigável do app
-   - **Bundle ID**: Identificador único (ex: `com.empresa.meuapp`)
-   - **Plataforma**: iOS ou Android
-
-### 2. Configurar o Aplicativo
-
-1. Na lista de apps, clique no ícone de configuração (⚙️)
-2. Configure:
-   - **Record Screen**: Ativar/desativar gravação
-   - **Framerate**: Quantos frames por segundo capturar
-   - **Screen Size**: Resolução das capturas
-
-### 3. Usar no Aplicativo React Native
+### 1. Inicializar o Sistema
 
 ```typescript
 import * as ExpoAnalytics from 'expo-analytics';
 
-// Iniciar analytics - busca configurações automaticamente
-await ExpoAnalytics.start({
-  apiHost: 'http://localhost:8080',
-  userId: 'user123',
+// Inicializar e cadastrar usuário automaticamente
+await ExpoAnalytics.init({
+  userId: 'user-123',
+  apiHost: 'http://localhost:8888',
   userData: {
     appVersion: '1.0.0',
-    platform: 'iOS'
+    userType: 'premium'
   }
 });
-
-// Opcionalmente, buscar configurações manualmente
-const config = await ExpoAnalytics.fetchAppConfig('http://localhost:8080');
-console.log('Configurações:', config);
-// Output: { recordScreen: true, framerate: 15, screenSize: 480 }
 ```
 
-## 🎯 Fluxo de Funcionamento
+### 2. Iniciar Tracking (Opcional)
 
-1. **App Inicia**: Ao chamar `start()`, o módulo nativo busca configurações pelo Bundle ID
-2. **Configurações Aplicadas**: 
-   - Se `recordScreen: false`, não inicia gravação
-   - Se `recordScreen: true`, aplica framerate e screenSize configurados
-3. **Override Local**: Parâmetros passados para `start()` podem sobrescrever configurações do servidor
-4. **Dashboard**: Mostra dados apenas do app selecionado
+```typescript
+// Iniciar gravação de sessões (se habilitado no servidor)
+await ExpoAnalytics.start({
+  framerate: 10,      // FPS da gravação
+  screenSize: 480     // Resolução dos screenshots
+});
+```
 
-## 📱 Interface do Dashboard
+### 3. Rastrear Eventos
 
-### Tela Principal - Gestão de Apps
-- **Grid de Apps**: Cartões com informações e configurações resumidas
-- **Ações Rápidas**: Configurar, deletar, ver analytics
-- **Status Visual**: Indicadores claros de Record Screen ativo/inativo
+```typescript
+// Rastrear eventos (com screenshot automático)
+await ExpoAnalytics.trackEvent('button_click', 'purchase_button');
+await ExpoAnalytics.trackEvent('page_view', 'product_details');
+```
 
-### Tela de Analytics (por App)
-- **Breadcrumb**: Navegação clara com botão "Voltar aos Apps"
-- **Estatísticas Filtradas**: Dados específicos do app selecionado
-- **Configuração Rápida**: Botão para ajustar configurações sem sair da página
+## 📸 Nova Funcionalidade: Screenshots Manuais
 
-## 🔧 Estrutura de Dados
+```typescript
+// Capturar screenshot e enviar para o servidor
+const result = await ExpoAnalytics.takeScreenshot(
+  640,    // largura
+  1280,   // altura  
+  0.8     // compressão (0.0 a 1.0)
+);
 
-### Arquivo de Configuração do App
+if (result.success) {
+  console.log('Screenshot enviado para o dashboard!');
+  console.log(`Tamanho: ${result.width}x${result.height}`);
+  console.log(`Arquivo: ${result.size} bytes`);
+  console.log(result.message);
+} else {
+  console.error('Erro:', result.error);
+}
+```
+
+### Exemplos de Uso de Screenshots
+
+```typescript
+// Screenshot de alta qualidade
+const hd = await ExpoAnalytics.takeScreenshot(1080, 1920, 0.9);
+
+// Screenshot compacto para economizar dados
+const compact = await ExpoAnalytics.takeScreenshot(320, 640, 0.6);
+
+// Screenshot com qualidade média
+const standard = await ExpoAnalytics.takeScreenshot(640, 1280, 0.8);
+
+// Os screenshots aparecerão automaticamente na aba "Screenshots" do dashboard
+```
+
+## 📱 Informações Automáticas do Dispositivo
+
+O sistema agora coleta automaticamente as seguintes informações:
+
+```typescript
+// Informações coletadas automaticamente:
+{
+  platform: "iOS 17.0",                    // Sistema operacional
+  device: "iPhone15,2 (iPhone 14 Pro)",   // Modelo do dispositivo
+  appVersion: "1.0.0.(123)",              // Versão do app
+  screenSize: "1179x2556",                // Resolução da tela
+  depth: "32 bits",                       // Profundidade de cor
+  fontSize: "17pt (system: 16pt)",        // Tamanho da fonte
+  userLanguage: "pt",                     // Idioma do usuário
+  country: "PT-BR",                       // País e região
+  bundleId: "com.example.app"             // Bundle ID
+}
+```
+
+## 🌐 API Backend
+
+### Novos Endpoints
+
+#### POST `/take-screenshot`
+Recebe screenshots manuais capturados via `takeScreenshot()` e salva na pasta screenshots para aparecer no dashboard.
+
 ```json
 {
-  "bundleId": "com.empresa.meuapp",
-  "name": "Meu Aplicativo",
-  "platform": "ios",
-  "config": {
-    "recordScreen": true,
-    "framerate": 15,
-    "screenSize": 480
-  },
-  "createdAt": 1640995200,
-  "updatedAt": 1640995200
+  "userId": "user-123",
+  "screenshotData": "base64_image_data",
+  "width": 640,
+  "height": 1280,
+  "compression": 0.8,
+  "timestamp": 1640995200,
+  "type": "manual"
 }
 ```
 
-### Endpoint de Configurações
-```
-GET /app-config?bundleId=com.empresa.meuapp
+### Estrutura de Pastas no Servidor
 
-Response:
-{
-  "success": true,
-  "config": {
-    "recordScreen": true,
-    "framerate": 15,
-    "screenSize": 480
-  }
+```
+analytics-data/
+├── users/              # Dados dos usuários
+├── events/             # Eventos rastreados
+├── events-screenshots/ # Screenshots de eventos
+├── screenshots/        # Screenshots de sessão E manuais
+├── videos/            # Sessões convertidas em vídeo
+└── logs/              # Logs do sistema
+```
+
+## 🎮 API Completa
+
+### Métodos Principais
+
+```typescript
+// 1. Inicialização (obrigatório)
+await ExpoAnalytics.init(options);
+
+// 2. Controle de sessões
+await ExpoAnalytics.start(options);
+await ExpoAnalytics.stop();
+
+// 3. Eventos
+await ExpoAnalytics.trackEvent(event, value);
+
+// 4. Screenshots manuais (NOVO)
+await ExpoAnalytics.takeScreenshot(width?, height?, compression?);
+
+// 5. Dados do usuário
+await ExpoAnalytics.updateUserInfo(userData);
+
+// 6. Configurações
+const config = await ExpoAnalytics.fetchAppConfig(apiHost, bundleId);
+```
+
+### Tipos TypeScript
+
+```typescript
+interface TakeScreenshotResult {
+  success: boolean;
+  message?: string;     // Mensagem de sucesso
+  width?: number;       // Largura real
+  height?: number;      // Altura real
+  size?: number;        // Tamanho em bytes
+  error?: string;       // Mensagem de erro
 }
 ```
 
-## 🔧 APIs Adicionadas
+## 🔧 Configuração do Servidor
 
-### Backend (PHP)
-- `POST /apps` - Criar novo app
-- `PUT /apps` - Atualizar configurações do app  
-- `DELETE /apps` - Deletar app
-- `GET /apps` - Listar todos os apps
-- `GET /app-config` - Buscar configurações por Bundle ID
+### 1. Iniciar Servidor PHP
 
-### Módulo Nativo (TypeScript/Swift)
-- `fetchAppConfig(apiHost, bundleId?)` - Buscar configurações do servidor
-- `start()` modificado para buscar configurações automaticamente
-- Configurações aplicadas: recordScreen, framerate, screenSize
-
-## 📊 Benefícios
-
-### Para Desenvolvedores
-- **Controle Remoto**: Ajustar configurações sem atualizar o app
-- **A/B Testing**: Diferentes configurações para diferentes versões
-- **Debug Remoto**: Ativar/desativar gravação para usuários específicos
-
-### Para Performance
-- **Otimização Dinâmica**: Ajustar qualidade baseado na capacidade do servidor
-- **Controle de Banda**: Reduzir framerate em conexões lentas
-- **Economia de Recursos**: Desativar gravação quando não necessário
-
-### Para Analytics
-- **Dados Organizados**: Separação clara por aplicativo
-- **Escalabilidade**: Suporte a múltiplos projetos
-- **Configuração Granular**: Controle fino sobre cada aspecto da coleta
-
-## 🛠️ Instalação e Configuração
-
-### 1. Iniciar o Backend
 ```bash
 cd backend
-php -S localhost:8080 api-receiver.php
+php -S localhost:8888 api-receiver.php
 ```
 
-### 2. Acessar Dashboard
-```
-http://localhost:8080/dashboard
-```
+### 2. Dashboard Web
 
-### 3. Configurar App React Native
-```typescript
-// No seu App.tsx
-import * as ExpoAnalytics from 'expo-analytics';
+Acesse: `http://localhost:8888/dashboard`
 
-await ExpoAnalytics.start({
-  apiHost: 'http://localhost:8080',
-  userId: 'user123'
-});
-```
+**Funcionalidades do Dashboard:**
+- ✅ Lista de usuários e apps
+- ✅ Visualização de eventos e timeline
+- ✅ Galeria de screenshots de eventos
+- ✅ Player de vídeos de sessões
+- ✅ **NOVO**: Galeria de screenshots manuais
+- ✅ **NOVO**: Informações detalhadas do dispositivo
+- ✅ Dados geográficos com bandeiras
+- ✅ Configurações dinâmicas por app
 
-## 📂 Estrutura do Projeto
+### 3. Configurar App no Servidor
 
-```
-expo-analytics/
-├── src/                     # Módulo TypeScript
-├── ios/                     # Implementação Swift
-├── android/                 # Implementação Kotlin  
-├── example/                 # App demo
-├── backend/                 # API PHP e Dashboard
-│   ├── dashboard.php        # Interface de gestão
-│   ├── api-receiver.php     # API endpoints
-│   └── assets/              # CSS e JS
-├── analytics-data/          # Dados coletados
-│   └── apps/                # Configurações dos apps
-└── README.md
-```
-
-## 🔍 Monitoramento
-
-### Logs do Módulo Nativo
 ```bash
-# iOS (XCode Console)
-📱 [ExpoAnalytics] Bundle ID: com.empresa.meuapp
-🔍 [ExpoAnalytics] Buscando configurações para: com.empresa.meuapp
-✅ [ExpoAnalytics] Configurações recebidas: {"recordScreen":true,"framerate":15,"screenSize":480}
-🔧 [ExpoAnalytics] Configurações aplicadas:
-   Record Screen: true
-   Framerate: 15 fps  
-   Screen Size: 480x960
-🎬 [ExpoAnalytics] Captura de tela iniciada com 15 fps
+curl -X POST http://localhost:8888/apps \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bundleId": "com.example.app",
+    "name": "Meu App",
+    "platform": "ios",
+    "config": {
+      "recordScreen": true,
+      "framerate": 10,
+      "screenSize": 480
+    }
+  }'
 ```
 
-### Dashboard em Tempo Real
-- Auto-refresh a cada 30 segundos
-- Indicadores visuais de status
-- Estatísticas filtradas por app
+## 📊 Casos de Uso
+
+### E-commerce
+```typescript
+// Produto visualizado
+await ExpoAnalytics.trackEvent('product_view', 'product_123');
+
+// Screenshot da tela de checkout (salvo no dashboard)
+await ExpoAnalytics.takeScreenshot(640, 1280, 0.8);
+
+// Compra finalizada
+await ExpoAnalytics.trackEvent('purchase', 'order_456');
+```
+
+### Jogos
+```typescript
+// Level completado
+await ExpoAnalytics.trackEvent('level_complete', 'level_5');
+
+// Screenshot de conquista (salvo no dashboard)
+await ExpoAnalytics.takeScreenshot(1080, 1920, 0.9);
+
+// Game over
+await ExpoAnalytics.trackEvent('game_over', 'score_1250');
+```
+
+### Formulários
+```typescript
+// Campo preenchido
+await ExpoAnalytics.trackEvent('field_filled', 'email');
+
+// Screenshot do erro (salvo no dashboard)
+await ExpoAnalytics.takeScreenshot(320, 640, 0.6);
+
+// Formulário enviado
+await ExpoAnalytics.trackEvent('form_submit', 'contact_form');
+```
+
+## 🔒 Privacidade e Segurança
+
+- **Dados Locais**: Screenshots ficam no servidor configurado
+- **Geolocalização**: Baseada apenas em IP público
+- **Opt-out**: Usuário pode desabilitar funcionalidades
+- **Compressão**: Screenshots são otimizados automaticamente
+- **Auto-limpeza**: Arquivos temporários são removidos automaticamente
+
+## 🎯 Próximas Funcionalidades
+
+- [ ] 📹 Gravação de vídeo nativa
+- [ ] 🔄 Sincronização offline
+- [ ] 📈 Analytics em tempo real
+- [ ] 🎨 Customização de UI do dashboard
+- [ ] 🔔 Notificações automáticas
+- [ ] 📱 App móvel para dashboard
+
+## 🐛 Solução de Problemas
+
+### Screenshots não são enviados
+```typescript
+// Verificar se o envio foi bem-sucedido
+const result = await ExpoAnalytics.takeScreenshot();
+if (!result.success) {
+  console.log('Erro:', result.error);
+}
+
+// Verificar se o screenshot aparece no dashboard em:
+// http://localhost:8888/dashboard -> aba Screenshots
+```
+
+### Servidor não recebe dados
+```bash
+# Verificar logs do servidor
+tail -f backend/analytics-data/logs/$(date +%Y-%m-%d).log
+```
+
+### Dashboard não carrega
+```bash
+# Verificar se o servidor está rodando
+curl http://localhost:8888/status
+```
+
+## 📄 Licença
+
+MIT License - veja [LICENSE](LICENSE) para detalhes.
 
 ---
 
-Sistema desenvolvido para fornecer analytics completos com controle total sobre a coleta de dados, performance otimizada e interface administrativa intuitiva. 
+## 🚀 Exemplo Completo
+
+```typescript
+import * as ExpoAnalytics from 'expo-analytics';
+
+export default function App() {
+  useEffect(() => {
+    initializeAnalytics();
+  }, []);
+
+  const initializeAnalytics = async () => {
+    // 1. Inicializar sistema
+    await ExpoAnalytics.init({
+      userId: 'user-' + Date.now(),
+      apiHost: 'http://localhost:8888',
+      userData: {
+        appVersion: '1.0.0',
+        userType: 'premium'
+      }
+    });
+
+    // 2. Iniciar gravação (opcional)
+    await ExpoAnalytics.start({
+      framerate: 10,
+      screenSize: 480
+    });
+  };
+
+  const handleButtonPress = async () => {
+    // 3. Rastrear evento
+    await ExpoAnalytics.trackEvent('button_press', 'main_cta');
+    
+    // 4. Capturar screenshot e enviar para dashboard
+    const result = await ExpoAnalytics.takeScreenshot(640, 1280, 0.8);
+    
+    if (result.success) {
+      console.log('Screenshot enviado para o dashboard!');
+    }
+  };
+
+  return (
+    <View>
+      <Button title="Pressione Aqui" onPress={handleButtonPress} />
+    </View>
+  );
+}
+```
+
+**Dashboard disponível em:** http://localhost:8888/dashboard 

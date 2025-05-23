@@ -47,6 +47,21 @@ export async function updateUserInfo(userData?: Record<string, any>): Promise<vo
   return ExpoAnalyticsModule.updateUserInfo(userData);
 }
 
+/**
+ * Captura screenshot manual e envia para o servidor
+ * O screenshot será salvo na pasta screenshots e aparecerá na aba Screenshots do dashboard
+ */
+export async function takeScreenshot(width?: number, height?: number, compression?: number): Promise<{
+  success: boolean;
+  message?: string;
+  width?: number;
+  height?: number;
+  size?: number;
+  error?: string;
+}> {
+  return ExpoAnalyticsModule.takeScreenshot(width, height, compression);
+}
+
 export default {
   fetchAppConfig,
   init,
@@ -54,4 +69,5 @@ export default {
   stop,
   trackEvent,
   updateUserInfo,
+  takeScreenshot,
 };

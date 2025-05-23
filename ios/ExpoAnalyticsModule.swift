@@ -175,6 +175,15 @@ public class ExpoAnalyticsModule: Module {
       return await self.fetchAppConfigFromServer(bundleId: bundleIdToUse, apiHost: hostToUse)
     }
 
+    // Nova função para capturar screenshot manual
+    AsyncFunction("takeScreenshot") { (width: Int?, height: Int?, compression: Double?) -> [String: Any] in
+      let targetWidth = width ?? Int(self.screenSize.width)
+      let targetHeight = height ?? Int(self.screenSize.height)
+      let quality = compression ?? 0.8
+      
+      return await self.captureManualScreenshot(width: targetWidth, height: targetHeight, compression: quality)
+    }
+
     AsyncFunction("init") { (options: [String: Any]?) in
       NSLog("🚀 [ExpoAnalytics] Inicializando sistema...")
       
@@ -185,11 +194,16 @@ public class ExpoAnalyticsModule: Module {
         if let data = config["userData"] as? [String: Any] { self.userData = data }
       }
 
-      // Adicionar informações automáticas do device e app IMEDIATAMENTE
+      // Adicionar informações completas do device e app IMEDIATAMENTE
       self.userData["appVersion"] = self.getFormattedAppVersion()
       self.userData["bundleId"] = self.getBundleIdentifier()
       self.userData["platform"] = self.getIOSVersion()
       self.userData["device"] = self.getFormattedDeviceInfo()
+      self.userData["screenSize"] = self.getScreenSizeInfo()
+      self.userData["depth"] = self.getScreenDepth()
+      self.userData["fontSize"] = self.getSystemFontSize()
+      self.userData["userLanguage"] = self.getUserLanguage()
+      self.userData["country"] = self.getUserCountryAndLanguage()
       self.userData["environment"] = "production"
       self.userData["initTime"] = Date().toISOString()
 
@@ -208,11 +222,16 @@ public class ExpoAnalyticsModule: Module {
         if let data = config["userData"] as? [String: Any] { self.userData = data }
       }
 
-      // Adicionar informações automáticas do device e app IMEDIATAMENTE
+      // Adicionar informações completas do device e app IMEDIATAMENTE
       self.userData["appVersion"] = self.getFormattedAppVersion()
       self.userData["bundleId"] = self.getBundleIdentifier()
       self.userData["platform"] = self.getIOSVersion()
       self.userData["device"] = self.getFormattedDeviceInfo()
+      self.userData["screenSize"] = self.getScreenSizeInfo()
+      self.userData["depth"] = self.getScreenDepth()
+      self.userData["fontSize"] = self.getSystemFontSize()
+      self.userData["userLanguage"] = self.getUserLanguage()
+      self.userData["country"] = self.getUserCountryAndLanguage()
       self.userData["environment"] = "production" // ou detectar se é debug
       self.userData["sessionStartTime"] = Date().toISOString()
 
@@ -256,6 +275,11 @@ public class ExpoAnalyticsModule: Module {
       NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
       NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
       NSLog("   Bundle ID: \(self.userData["bundleId"] ?? "unknown")")
+      NSLog("   Screen Size Info: \(self.userData["screenSize"] ?? "unknown")")
+      NSLog("   Depth: \(self.userData["depth"] ?? "unknown")")
+      NSLog("   Font Size: \(self.userData["fontSize"] ?? "unknown")")
+      NSLog("   Language: \(self.userData["userLanguage"] ?? "unknown")")
+      NSLog("   Country: \(self.userData["country"] ?? "unknown")")
 
       // Iniciar captura apenas se record screen estiver ativo
       if self.recordScreenEnabled {
@@ -346,15 +370,54 @@ public class ExpoAnalyticsModule: Module {
     }
 
     AsyncFunction("updateUserInfo") { (userData: [String: Any]?) in
+      NSLog("🔄 [ExpoAnalytics] Atualizando informações do usuário...")
+      
+      // 1. Adicionar/atualizar parâmetros enviados pelo usuário
       if let data = userData {
+        NSLog("📝 [ExpoAnalytics] Adicionando novos dados do usuário: \(data.keys.joined(separator: ", "))")
         for (key, value) in data {
           self.userData[key] = value
         }
       }
-
-        self.sendUserInfoPayload()
+      
+      // 2. Atualizar/refrescar TODAS as informações do dispositivo
+      // (sempre pegar dados mais recentes)
+      NSLog("📱 [ExpoAnalytics] Atualizando informações do dispositivo...")
+      
+      self.userData["appVersion"] = self.getFormattedAppVersion()
+      self.userData["bundleId"] = self.getBundleIdentifier()
+      self.userData["platform"] = self.getIOSVersion()
+      self.userData["device"] = self.getFormattedDeviceInfo()
+      self.userData["screenSize"] = self.getScreenSizeInfo()
+      self.userData["depth"] = self.getScreenDepth()
+      self.userData["fontSize"] = self.getSystemFontSize()
+      self.userData["userLanguage"] = self.getUserLanguage()
+      self.userData["country"] = self.getUserCountryAndLanguage()
+      self.userData["environment"] = "production"
+      self.userData["lastUpdate"] = Date().toISOString()
+      
+      // 3. Log das informações atualizadas
+      NSLog("📊 [ExpoAnalytics] Dados atualizados:")
+      NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
+      NSLog("   Device: \(self.userData["device"] ?? "unknown")")
+      NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
+      NSLog("   Screen Size: \(self.userData["screenSize"] ?? "unknown")")
+      NSLog("   Depth: \(self.userData["depth"] ?? "unknown")")
+      NSLog("   Font Size: \(self.userData["fontSize"] ?? "unknown")")
+      NSLog("   Language: \(self.userData["userLanguage"] ?? "unknown")")
+      NSLog("   Country: \(self.userData["country"] ?? "unknown")")
+      
+      if let customData = userData {
+        NSLog("   Dados customizados: \(customData)")
       }
+      
+      // 4. Enviar informações atualizadas para o servidor
+      NSLog("📤 [ExpoAnalytics] Enviando dados atualizados para o servidor...")
+      self.sendUserInfoPayload()
+      
+      NSLog("✅ [ExpoAnalytics] Informações do usuário atualizadas com sucesso!")
     }
+  }
 
   private func startNewSession() {
     // Limpar sessão anterior se houver
@@ -874,6 +937,172 @@ public class ExpoAnalyticsModule: Module {
     return Bundle.main.bundleIdentifier ?? "unknown.app"
   }
   
+  // MARK: - Novas funções de informações do dispositivo
+  
+  private func getScreenSizeInfo() -> String {
+    let screenBounds = UIScreen.main.bounds
+    let screenScale = UIScreen.main.scale
+    
+    let physicalWidth = Int(screenBounds.width * screenScale)
+    let physicalHeight = Int(screenBounds.height * screenScale)
+    
+    return "\(physicalWidth)x\(physicalHeight)"
+  }
+  
+  private func getScreenDepth() -> Int {
+    // iOS geralmente usa 32 bits (8 bits por canal RGBA)
+    // Pode ser obtido através do UIScreen
+    return 32
+  }
+  
+  private func getSystemFontSize() -> String {
+    let preferredFontSize = UIFont.preferredFont(forTextStyle: .body).pointSize
+    let systemFontSize = UIFont.systemFontSize
+    return "\(Int(preferredFontSize))pt (system: \(Int(systemFontSize))pt)"
+  }
+  
+  private func getUserLanguage() -> String {
+    return Locale.current.languageCode ?? "unknown"
+  }
+  
+  private func getUserCountryAndLanguage() -> String {
+    let locale = Locale.current
+    
+    // Obter código da linguagem (ex: "en", "pt")
+    let languageCode = locale.languageCode ?? "unknown"
+    
+    // Obter código do país/região (ex: "US", "BR")
+    let countryCode = locale.regionCode ?? "unknown"
+    
+    // Formar código completo (ex: "en-US", "pt-BR")
+    return "\(languageCode)-\(countryCode)".uppercased()
+  }
+  
+  // MARK: - Função de screenshot manual
+  
+  private func captureManualScreenshot(width: Int, height: Int, compression: Double) async -> [String: Any] {
+    return await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first else {
+          continuation.resume(returning: [
+            "success": false,
+            "error": "Não foi possível acessar a janela principal"
+          ])
+          return
+        }
+        
+        let originalBounds = window.bounds
+        let targetSize = CGSize(width: width, height: height)
+        let scaleX = targetSize.width / originalBounds.width
+        let scaleY = targetSize.height / originalBounds.height
+        
+        UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0)
+        
+        guard let context = UIGraphicsGetCurrentContext() else {
+          continuation.resume(returning: [
+            "success": false,
+            "error": "Erro ao criar contexto gráfico"
+          ])
+          return
+        }
+        
+        context.scaleBy(x: scaleX, y: scaleY)
+        window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+        
+        let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        guard let image = capturedImage else {
+          continuation.resume(returning: [
+            "success": false,
+            "error": "Erro ao capturar screenshot"
+          ])
+          return
+        }
+        
+        // Comprimir com qualidade especificada
+        guard let imageData = image.jpegData(compressionQuality: compression) else {
+          continuation.resume(returning: [
+            "success": false,
+            "error": "Erro ao comprimir imagem"
+          ])
+          return
+        }
+        
+        NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB")
+        
+        // Enviar screenshot para o servidor em background
+        Task {
+          let success = await self.sendManualScreenshotToServer(imageData: imageData, width: width, height: height, compression: compression)
+          
+          if success {
+            continuation.resume(returning: [
+              "success": true,
+              "message": "Screenshot enviado com sucesso",
+              "width": width,
+              "height": height,
+              "size": imageData.count
+            ])
+          } else {
+            continuation.resume(returning: [
+              "success": false,
+              "error": "Falha ao enviar screenshot para o servidor"
+            ])
+          }
+        }
+      }
+    }
+  }
+  
+  private func sendManualScreenshotToServer(imageData: Data, width: Int, height: Int, compression: Double) async -> Bool {
+    let timestamp = Date().timeIntervalSince1970
+    
+    let payload: [String: Any] = [
+      "userId": self.userId,
+      "screenshotData": imageData.base64EncodedString(),
+      "width": width,
+      "height": height,
+      "compression": compression,
+      "timestamp": timestamp,
+      "userData": self.userData,
+      "type": "manual"
+    ]
+    
+    guard let url = URL(string: self.apiHost + "/take-screenshot") else {
+      NSLog("❌ [ExpoAnalytics] URL inválida para screenshot: \(self.apiHost)")
+      return false
+    }
+    
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    
+    do {
+      let jsonData = try JSONSerialization.data(withJSONObject: payload)
+      request.httpBody = jsonData
+      
+      NSLog("📤 [ExpoAnalytics] Enviando screenshot manual para servidor...")
+      
+      let (data, response) = try await URLSession.shared.data(for: request)
+      
+      if let httpResponse = response as? HTTPURLResponse {
+        let statusCode = httpResponse.statusCode
+        if statusCode == 200 {
+          NSLog("✅ [ExpoAnalytics] Screenshot manual enviado com sucesso!")
+          return true
+        } else {
+          NSLog("⚠️ [ExpoAnalytics] Screenshot enviado com status não-200: \(statusCode)")
+          return false
+        }
+      }
+    } catch {
+      NSLog("❌ [ExpoAnalytics] Erro ao enviar screenshot manual: \(error)")
+    }
+    
+    return false
+  }
+
   private func captureScreenshotForEvent() -> Data? {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
           let window = windowScene.windows.first else { 

@@ -371,21 +371,45 @@ function getUserSessions($baseDir, $userId) {
         foreach (glob($userScreenshotsDir . '/*') as $sessionDir) {
             if (is_dir($sessionDir)) {
                 $date = basename($sessionDir);
-                $screenshots = glob($sessionDir . '/*.jpg');
-                $metadataFiles = glob($sessionDir . '/metadata_*.json');
                 
-                $metadata = [];
-                if (!empty($metadataFiles)) {
-                    $metadata = json_decode(file_get_contents($metadataFiles[0]), true);
+                // Separar screenshots de sessão tradicionais dos manuais
+                $allScreenshots = glob($sessionDir . '/*.jpg');
+                $sessionScreenshots = [];
+                
+                foreach ($allScreenshots as $screenshot) {
+                    $filename = basename($screenshot);
+                    // Ignorar screenshots manuais (que começam com "manual_screenshot_")
+                    if (!preg_match('/^manual_screenshot_/', $filename)) {
+                        $sessionScreenshots[] = $screenshot;
+                    }
                 }
                 
-                $sessions[] = [
-                    'date' => $date,
-                    'path' => $sessionDir,
-                    'screenshotCount' => count($screenshots),
-                    'metadata' => $metadata,
-                    'firstScreenshot' => !empty($screenshots) ? basename($screenshots[0]) : null
-                ];
+                // Só criar sessão se houver screenshots de sessão tradicionais
+                if (!empty($sessionScreenshots)) {
+                    $metadataFiles = glob($sessionDir . '/metadata_*.json');
+                    
+                    // Filtrar metadados manuais
+                    $sessionMetadataFiles = [];
+                    foreach ($metadataFiles as $metadataFile) {
+                        $filename = basename($metadataFile);
+                        if (!preg_match('/^metadata_manual_/', $filename)) {
+                            $sessionMetadataFiles[] = $metadataFile;
+                        }
+                    }
+                    
+                    $metadata = [];
+                    if (!empty($sessionMetadataFiles)) {
+                        $metadata = json_decode(file_get_contents($sessionMetadataFiles[0]), true);
+                    }
+                    
+                    $sessions[] = [
+                        'date' => $date,
+                        'path' => $sessionDir,
+                        'screenshotCount' => count($sessionScreenshots),
+                        'metadata' => $metadata,
+                        'firstScreenshot' => !empty($sessionScreenshots) ? basename($sessionScreenshots[0]) : null
+                    ];
+                }
             }
         }
     }
@@ -395,6 +419,61 @@ function getUserSessions($baseDir, $userId) {
     });
     
     return $sessions;
+}
+
+// Nova função para obter screenshots manuais
+function getUserManualScreenshots($baseDir, $userId) {
+    $manualScreenshots = [];
+    $userScreenshotsDir = $baseDir . '/screenshots/' . $userId;
+    
+    if (is_dir($userScreenshotsDir)) {
+        foreach (glob($userScreenshotsDir . '/*') as $sessionDir) {
+            if (is_dir($sessionDir)) {
+                $date = basename($sessionDir);
+                $screenshots = glob($sessionDir . '/manual_screenshot_*.jpg');
+                
+                foreach ($screenshots as $screenshot) {
+                    $filename = basename($screenshot);
+                    $fileSize = filesize($screenshot);
+                    $fileTime = filemtime($screenshot);
+                    
+                    // Extrair informações do nome do arquivo (manual_screenshot_timestamp_widthxheight.jpg)
+                    if (preg_match('/^manual_screenshot_(\d+)_(\d+)x(\d+)\.jpg$/', $filename, $matches)) {
+                        $timestamp = $matches[1];
+                        $width = $matches[2];
+                        $height = $matches[3];
+                        
+                        // Buscar metadados correspondentes
+                        $metadataFile = $sessionDir . '/metadata_manual_' . $timestamp . '.json';
+                        $metadata = null;
+                        if (file_exists($metadataFile)) {
+                            $metadata = json_decode(file_get_contents($metadataFile), true);
+                        }
+                        
+                        $manualScreenshots[] = [
+                            'type' => 'manual',
+                            'date' => $date,
+                            'filename' => $filename,
+                            'path' => 'view-screenshot.php?user=' . urlencode($userId) . '&date=' . urlencode($date) . '&file=' . urlencode($filename),
+                            'size' => $fileSize,
+                            'timestamp' => $timestamp,
+                            'width' => $width,
+                            'height' => $height,
+                            'fileTime' => $fileTime,
+                            'metadata' => $metadata
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    
+    // Ordenar por timestamp (mais recentes primeiro)
+    usort($manualScreenshots, function($a, $b) {
+        return $b['timestamp'] - $a['timestamp'];
+    });
+    
+    return $manualScreenshots;
 }
 
 // Função para obter screenshots de eventos de um usuário
@@ -539,7 +618,7 @@ function getUserData($baseDir, $userId) {
         $userData['geoData'] = $userData['latestInfo']['geo'] ?? null;
     }
     
-    // Sessões de screenshots
+    // Sessões de screenshots (tradicionais)
     $userData['allSessions'] = getUserSessions($baseDir, $userId);
     foreach ($userData['allSessions'] as $session) {
         $userData['totalScreenshots'] += $session['screenshotCount'];
@@ -557,15 +636,13 @@ function getUserData($baseDir, $userId) {
         }
     }
 
-    // Screenshots de eventos (adicionar às sessões)
+    // Screenshots de eventos
     $userData['eventScreenshots'] = getUserEventScreenshots($baseDir, $userId);
-
-    // Adicionar screenshots de eventos na contagem total
-    $eventsScreenshotsDir = $baseDir . '/events-screenshots/' . $userId;
-    if (is_dir($eventsScreenshotsDir)) {
-        $eventScreenshots = glob($eventsScreenshotsDir . '/*/*.jpg');
-        $userData['totalScreenshots'] += count($eventScreenshots);
-    }
+    $userData['totalScreenshots'] += count($userData['eventScreenshots']);
+    
+    // Screenshots manuais
+    $userData['manualScreenshots'] = getUserManualScreenshots($baseDir, $userId);
+    $userData['totalScreenshots'] += count($userData['manualScreenshots']);
     
     // Vídeos
     $userData['allVideos'] = getUserVideos($baseDir, $userId);
@@ -1272,9 +1349,27 @@ $screenSizeOptions = [
                                             </div>
                                             <?php else: ?>
                                             <div class="empty-timeline">
-                                                <i class="fas fa-history"></i>
-                                                <h4>Nenhum evento registrado</h4>
-                                                <p>Os eventos do usuário aparecerão aqui quando forem capturados pelo app.</p>
+                                                <div class="empty-icon">
+                                                    <i class="fas fa-chart-line"></i>
+                                                </div>
+                                                <div class="empty-content">
+                                                    <h4>Linha do Tempo Vazia</h4>
+                                                    <p>Os eventos do usuário aparecerão aqui conforme forem sendo capturados pelo aplicativo.</p>
+                                                    <div class="empty-features">
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-mouse-pointer"></i>
+                                                            <span>Cliques e interações</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-camera"></i>
+                                                            <span>Screenshots automáticos</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-map-marker-alt"></i>
+                                                            <span>Dados de localização</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                         </div>
                                         <?php endif; ?>
                                     </div>
@@ -1319,9 +1414,31 @@ $screenSizeOptions = [
                                             </div>
                                             <?php else: ?>
                                             <div class="empty-videos">
-                                                <i class="fas fa-film"></i>
-                                                <h4>Nenhuma sessão gravada</h4>
-                                                <p>As sessões de vídeo aparecerão aqui quando o app for para background.</p>
+                                                <div class="empty-icon">
+                                                    <i class="fas fa-video"></i>
+                                                </div>
+                                                <div class="empty-content">
+                                                    <h4>Nenhuma Sessão Gravada</h4>
+                                                    <p>As sessões de vídeo aparecerão aqui quando o aplicativo gravar a interação do usuário.</p>
+                                                    <div class="empty-features">
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-mobile-alt"></i>
+                                                            <span>App entra em background</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-record-vinyl"></i>
+                                                            <span>Gravação automática</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-play-circle"></i>
+                                                            <span>Reprodução completa</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="empty-hint">
+                                                        <i class="fas fa-info-circle"></i>
+                                                        <span>A gravação deve estar ativada nas configurações do app</span>
+                                                    </div>
+                                                </div>
                                 </div>
                                 <?php endif; ?>
                             </div>
@@ -1333,10 +1450,38 @@ $screenSizeOptions = [
                                             <?php 
                                             $hasTraditionalSessions = !empty($userSessions);
                                             $hasEventScreenshots = !empty($userData['eventScreenshots']);
-                                            $hasAnyScreenshots = $hasTraditionalSessions || $hasEventScreenshots;
+                                            $hasManualScreenshots = !empty($userData['manualScreenshots']);
+                                            $hasAnyScreenshots = $hasTraditionalSessions || $hasEventScreenshots || $hasManualScreenshots;
                                             ?>
                                             
                                             <?php if ($hasAnyScreenshots): ?>
+                                            
+                                            <!-- Screenshots Manuais -->
+                                            <?php if ($hasManualScreenshots): ?>
+                                            <div class="screenshots-section">
+                                                <h4><i class="fas fa-camera-retro"></i> Screenshots Manuais (<?= count($userData['manualScreenshots']) ?>)</h4>
+                                                <div class="event-screenshots-grid">
+                                                    <?php foreach ($userData['manualScreenshots'] as $manualScreenshot): ?>
+                                                    <div class="event-screenshot-card" 
+                                                         onclick="openScreenshotModal('<?= htmlspecialchars($manualScreenshot['path']) ?>', 'Screenshot Manual <?= $manualScreenshot['width'] ?>x<?= $manualScreenshot['height'] ?>')"
+                                                         style="cursor: pointer;">
+                                                        <div class="event-screenshot-thumbnail">
+                                                            <img src="<?= htmlspecialchars($manualScreenshot['path']) ?>" 
+                                                                 alt="Manual screenshot" loading="lazy">
+                                                            <div class="event-screenshot-overlay">
+                                                                <i class="fas fa-search-plus"></i>
+                                                            </div>
+                                                        </div>
+                                                        <div class="event-screenshot-info">
+                                                            <h5>Manual <?= $manualScreenshot['width'] ?>x<?= $manualScreenshot['height'] ?></h5>
+                                                            <p><i class="fas fa-calendar"></i> <?= date('d/m H:i', $manualScreenshot['timestamp']) ?></p>
+                                                            <p><i class="fas fa-hdd"></i> <?= number_format($manualScreenshot['size'] / 1024, 1) ?> KB</p>
+                                                        </div>
+                                                    </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
                                             
                                             <!-- Screenshots de Eventos -->
                                             <?php if ($hasEventScreenshots): ?>
@@ -1402,9 +1547,27 @@ $screenSizeOptions = [
                                             
                                             <?php else: ?>
                                             <div class="empty-sessions">
-                                                <i class="fas fa-camera"></i>
-                                                <h4>Nenhum screenshot encontrado</h4>
-                                                <p>Screenshots de eventos e sessões aparecerão aqui quando forem capturados.</p>
+                                                <div class="empty-icon">
+                                                    <i class="fas fa-images"></i>
+                                                </div>
+                                                <div class="empty-content">
+                                                    <h4>Nenhum Screenshot Encontrado</h4>
+                                                    <p>Screenshots de eventos, manuais e sessões aparecerão aqui quando forem capturados.</p>
+                                                    <div class="empty-features">
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-tag"></i>
+                                                            <span>Screenshots de eventos</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-hand-pointer"></i>
+                                                            <span>Screenshots manuais</span>
+                                                        </div>
+                                                        <div class="feature-item">
+                                                            <i class="fas fa-clock"></i>
+                                                            <span>Screenshots de sessão</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
                                             <?php endif; ?>
                                         </div>
@@ -1616,19 +1779,21 @@ $screenSizeOptions = [
         
         // Função para reproduzir vídeo
         function playVideo(videoPath) {
+            console.log('🎬 Reproduzindo vídeo:', videoPath);
+            
             // Criar modal de vídeo
             const modal = document.createElement('div');
             modal.className = 'video-modal';
             modal.innerHTML = `
                 <div class="video-modal-content">
                     <div class="video-modal-header">
-                        <h3><i class="fas fa-film"></i> Reproduzindo Vídeo</h3>
+                        <h3><i class="fas fa-film"></i> Reproduzindo Sessão Gravada</h3>
                         <button class="video-modal-close" onclick="closeVideoModal()">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
                     <div class="video-modal-body">
-                        <video id="mainVideo" controls autoplay style="width: 100%; max-height: 70vh;">
+                        <video id="mainVideo" controls autoplay style="width: 100%; max-height: 80vh;">
                             <source src="${videoPath}" type="video/mp4">
                             Seu navegador não suporta reprodução de vídeo.
                         </video>
@@ -1638,14 +1803,16 @@ $screenSizeOptions = [
             
             document.body.appendChild(modal);
             modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
             
             // Configurar evento de teclado para fechar
-            document.addEventListener('keydown', function escapeHandler(e) {
+            const escapeHandler = function(e) {
                 if (e.key === 'Escape') {
                     closeVideoModal();
                     document.removeEventListener('keydown', escapeHandler);
                 }
-            });
+            };
+            document.addEventListener('keydown', escapeHandler);
             
             // Configurar clique fora para fechar
             modal.addEventListener('click', function(e) {
@@ -1653,39 +1820,71 @@ $screenSizeOptions = [
                     closeVideoModal();
                 }
             });
+            
+            console.log('✅ Modal de vídeo criado e exibido');
         }
         
         // Função para fechar modal de vídeo
         function closeVideoModal() {
+            console.log('🚪 Fechando modal de vídeo');
             const modal = document.querySelector('.video-modal');
             if (modal) {
                 const video = modal.querySelector('video');
                 if (video) {
                     video.pause();
+                    video.currentTime = 0;
                 }
                 modal.remove();
+                document.body.style.overflow = 'auto';
             }
         }
         
         // Função para deletar dados do usuário
         function deleteUserData(userId) {
-            if (confirm('Tem certeza que deseja deletar TODOS os dados deste usuário?\n\nIsso incluirá:\n- Eventos\n- Screenshots\n- Vídeos\n- Informações pessoais\n\nEsta ação NÃO pode ser desfeita!')) {
+            if (confirm('Tem certeza que deseja deletar TODOS os dados deste usuário?\n\nIsso incluirá:\n• Screenshots de sessão e manuais\n• Screenshots de eventos\n• Vídeos de sessão\n• Eventos rastreados\n• Informações pessoais\n\nEsta ação NÃO pode ser desfeita!')) {
+                const loadingMessage = 'Deletando dados do usuário...';
+                
+                // Mostrar loading
+                const originalButton = event.target;
+                originalButton.disabled = true;
+                originalButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deletando...';
+                
                 fetch('/delete-user?userId=' + encodeURIComponent(userId), {
                     method: 'GET'
                 })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        alert('Dados do usuário deletados com sucesso!');
+                        let message = `Dados do usuário deletados com sucesso!\n\nResumo da exclusão:\n`;
+                        
+                        if (data.deletedDirs && data.deletedDirs.length > 0) {
+                            data.deletedDirs.forEach(dir => {
+                                message += `• ${dir.type}: ${dir.size}\n`;
+                            });
+                            message += `\nTotal removido: ${data.totalSize}`;
+                        } else {
+                            message += 'Nenhum dado foi encontrado para este usuário.';
+                        }
+                        
+                        alert(message);
+                        
                         // Voltar para a lista de usuários
                         window.location.href = '?app=' + encodeURIComponent('<?= $selectedApp ?>');
                     } else {
                         alert('Erro ao deletar dados do usuário: ' + (data.error || 'Erro desconhecido'));
+                        
+                        // Restaurar botão
+                        originalButton.disabled = false;
+                        originalButton.innerHTML = '<i class="fas fa-trash"></i> Deletar Dados';
                     }
                 })
                 .catch(error => {
                     console.error('Erro:', error);
                     alert('Erro ao deletar dados do usuário');
+                    
+                    // Restaurar botão
+                    originalButton.disabled = false;
+                    originalButton.innerHTML = '<i class="fas fa-trash"></i> Deletar Dados';
                 });
             }
         }
