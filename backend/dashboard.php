@@ -319,7 +319,7 @@ function getUserVideos($baseDir, $userId) {
                     $videos[] = [
                         'date' => $date,
                         'filename' => $videoName,
-                        'path' => $videoFile,
+                        'path' => "view-video.php?user=" . urlencode($userId) . "&date=" . urlencode($date) . "&file=" . urlencode($videoName),
                         'size' => $videoSize,
                         'sessionId' => $sessionId,
                         'timestamp' => $metadata['timestamp'] ?? filemtime($videoFile),

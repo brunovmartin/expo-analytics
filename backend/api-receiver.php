@@ -105,6 +105,11 @@ switch (true) {
         include __DIR__ . '/view-screenshot.php';
         break;
     
+    case strpos($uri, '/view-video.php') === 0:
+        // Incluir o visualizador de vídeos
+        include __DIR__ . '/view-video.php';
+        break;
+    
     case strpos($uri, '/session-data.php') === 0:
         // Incluir a API de dados de sessão
         include __DIR__ . '/session-data.php';
@@ -614,7 +619,7 @@ function handleGetAppConfig() {
 function handleUploadZip() {
     global $baseDir;
     
-    saveLog("�� Processando upload de sessão...");
+    saveLog("📥 Processando upload de sessão...");
     
     // Verificar se é um upload multipart
     if (!isset($_FILES['screenshots']) || !isset($_POST['metadata'])) {
@@ -851,20 +856,45 @@ function generateMP4FromImages($imagesPath, $outputVideoPath, $metadata) {
         $ffmpegCmd = 'ffmpeg';
     }
     
-    // Detectar framerate dos metadados ou usar padrão
-    $framerate = isset($metadata['userData']['framerate']) ? 
-        max(1, min($metadata['userData']['framerate'], 30)) : 10;
+    // Calcular FPS correto baseado na duração da sessão e quantidade de frames
+    $sessionDuration = $metadata['sessionDuration'] ?? 0;
+    $frameCount = $metadata['frameCount'] ?? 0;
+    $originalFramerate = $metadata['framerate'] ?? 10;
     
-    // Comando FFmpeg otimizado para compressão
-    $cmd = sprintf(
-        '%s -y -framerate %d -i %s -c:v libx264 -preset faster -crf 28 -vf "scale=480:960:force_original_aspect_ratio=decrease,pad=480:960:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -movflags +faststart %s 2>&1',
-        escapeshellarg($ffmpegCmd),
-        $framerate,
-        escapeshellarg($imagesPath . '/frame_%03d.jpg'),
-        escapeshellarg($outputVideoPath)
-    );
+    // Se temos duração da sessão e quantidade de frames, calcular FPS real
+    if ($sessionDuration > 0 && $frameCount > 0) {
+        $outputFPS = $frameCount / $sessionDuration;
+        $outputFPS = max(0.1, min($outputFPS, 30)); // Limitar entre 0.1 e 30 fps
+        saveLog("📊 Calculando FPS baseado na sessão: {$frameCount} frames / {$sessionDuration}s = {$outputFPS} fps");
+    } else {
+        $outputFPS = $originalFramerate;
+        saveLog("📊 Usando framerate original: {$outputFPS} fps");
+    }
     
-    saveLog("🎬 Executando FFmpeg: framerate=$framerate");
+    // Comando FFmpeg corrigido para usar duração específica
+    if ($sessionDuration > 0) {
+        // Usar -t para definir duração específica do vídeo
+        $cmd = sprintf(
+            '%s -y -framerate %.2f -i %s -t %.2f -c:v libx264 -preset faster -crf 28 -vf "scale=480:960:force_original_aspect_ratio=decrease,pad=480:960:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -movflags +faststart %s 2>&1',
+            escapeshellarg($ffmpegCmd),
+            $outputFPS,
+            escapeshellarg($imagesPath . '/frame_%03d.jpg'),
+            $sessionDuration,
+            escapeshellarg($outputVideoPath)
+        );
+        saveLog("🎬 Executando FFmpeg: fps={$outputFPS}, duração={$sessionDuration}s");
+    } else {
+        // Fallback para método original se não temos duração
+        $cmd = sprintf(
+            '%s -y -framerate %d -i %s -c:v libx264 -preset faster -crf 28 -vf "scale=480:960:force_original_aspect_ratio=decrease,pad=480:960:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -movflags +faststart %s 2>&1',
+            escapeshellarg($ffmpegCmd),
+            $originalFramerate,
+            escapeshellarg($imagesPath . '/frame_%03d.jpg'),
+            escapeshellarg($outputVideoPath)
+        );
+        saveLog("🎬 Executando FFmpeg (fallback): framerate={$originalFramerate}");
+    }
+    
     exec($cmd, $output, $returnCode);
     
     if ($returnCode === 0 && file_exists($outputVideoPath)) {
