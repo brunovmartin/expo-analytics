@@ -313,6 +313,15 @@ function handleTrack($data) {
     $userId = $data['userId'];
     $date = date('Y-m-d');
     
+    // Buscar dados geográficos pelo IP do usuário (cache por sessão)
+    static $geoCache = [];
+    $clientIP = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    
+    if (!isset($geoCache[$clientIP])) {
+        $geoCache[$clientIP] = fetchGeoInfo($clientIP);
+    }
+    $geoData = $geoCache[$clientIP];
+    
     // Criar diretório
     $eventsDir = $baseDir . '/events/' . $userId . '/' . $date;
     ensureDir($eventsDir);
@@ -324,7 +333,7 @@ function handleTrack($data) {
         'value' => $data['value'] ?? '',
         'timestamp' => $data['timestamp'] ?? time(),
         'userData' => $data['userData'] ?? [],
-        'geo' => $data['geo'] ?? [],
+        'geo' => $geoData,
         'receivedAt' => time()
     ];
     
@@ -332,7 +341,7 @@ function handleTrack($data) {
     $eventFile = $eventsDir . '/events_' . date('H') . '.jsonl';
     file_put_contents($eventFile, json_encode($event) . "\n", FILE_APPEND | LOCK_EX);
     
-    saveLog("Event tracked for user $userId: {$event['event']}");
+    saveLog("Event tracked for user $userId: {$event['event']} from {$geoData['flag']} {$geoData['city']}");
     jsonResponse(['success' => true]);
 }
 
@@ -347,6 +356,9 @@ function handleInit($data) {
     $userId = $data['userId'];
     $date = date('Y-m-d');
     
+    // Buscar dados geográficos pelo IP do usuário
+    $geoData = fetchGeoInfo();
+    
     // Criar diretório
     $userDir = $baseDir . '/users/' . $userId;
     ensureDir($userDir);
@@ -355,7 +367,7 @@ function handleInit($data) {
     $userInfo = [
         'userId' => $userId,
         'userData' => $data['userData'] ?? [],
-        'geo' => $data['geo'] ?? [],
+        'geo' => $geoData,
         'timestamp' => $data['timestamp'] ?? time(),
         'receivedAt' => time(),
         'date' => $date
@@ -369,8 +381,8 @@ function handleInit($data) {
     $latestFile = $userDir . '/latest.json';
     file_put_contents($latestFile, json_encode($userInfo, JSON_PRETTY_PRINT));
     
-    saveLog("User info updated for user $userId");
-    jsonResponse(['success' => true]);
+    saveLog("User info updated for user $userId from {$geoData['flag']} {$geoData['country']}");
+    jsonResponse(['success' => true, 'geo' => $geoData]);
 }
 
 // Handler para status
@@ -622,7 +634,10 @@ function handleUploadZip() {
     $timestamp = isset($metadata['timestamp']) ? (int)$metadata['timestamp'] : time();
     $date = date('Y-m-d', $timestamp);
     
-    saveLog("📥 ZIP recebido para usuário $userId - Tamanho: " . formatBytes($uploadedFile['size']));
+    // Buscar dados geográficos pelo IP do usuário
+    $geoData = fetchGeoInfo();
+    
+    saveLog("📥 ZIP recebido para usuário $userId de {$geoData['flag']} {$geoData['country']} - Tamanho: " . formatBytes($uploadedFile['size']));
     
     // Criar diretórios
     $userDir = $baseDir . '/videos/' . $userId . '/' . $date;
@@ -663,7 +678,7 @@ function handleUploadZip() {
             'userId' => $userId,
             'timestamp' => $timestamp,
             'userData' => $metadata['userData'] ?? [],
-            'geo' => $metadata['geo'] ?? [],
+            'geo' => $geoData,
             'receivedAt' => time(),
             'imageCount' => $imageCount,
             'videoFile' => $videoFileName,
@@ -802,6 +817,142 @@ function cleanupTempDir($tempDir) {
         deleteDir($tempDir);
         saveLog("🧹 Arquivos temporários removidos: $tempDir");
     }
+}
+
+// Função para buscar informações geográficas pelo IP
+function fetchGeoInfo($ip = null) {
+    // Se não fornecer IP, usar o IP do cliente
+    if (!$ip) {
+        $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        
+        // Se for IP local, tentar obter o IP público real
+        if (in_array($ip, ['127.0.0.1', '::1', 'localhost', 'unknown'])) {
+            $publicIP = getRealPublicIP();
+            if ($publicIP) {
+                $ip = $publicIP;
+                saveLog("🌐 IP público detectado: $ip");
+            } else {
+                $ip = '8.8.8.8'; // Google DNS para teste local apenas se falhar
+                saveLog("⚠️ Usando IP fallback para desenvolvimento: $ip");
+            }
+        }
+    }
+    
+    // Fazer chamada para ip-api.com
+    $url = "http://ip-api.com/json/$ip";
+    $context = stream_context_create([
+        'http' => [
+            'timeout' => 5, // 5 segundos timeout
+            'user_agent' => 'Expo Analytics Server/1.0'
+        ]
+    ]);
+    
+    $response = @file_get_contents($url, false, $context);
+    
+    if ($response === false) {
+        saveLog("❌ Erro ao buscar dados geográficos para IP: $ip");
+        return [
+            'ip' => $ip,
+            'country' => 'Unknown',
+            'countryCode' => 'XX',
+            'region' => 'Unknown',
+            'city' => 'Unknown',
+            'flag' => '🌍',
+            'error' => 'Failed to fetch geo data'
+        ];
+    }
+    
+    $geoData = json_decode($response, true);
+    
+    if (!$geoData || $geoData['status'] !== 'success') {
+        saveLog("❌ Dados geográficos inválidos para IP: $ip");
+        return [
+            'ip' => $ip,
+            'country' => 'Unknown',
+            'countryCode' => 'XX',
+            'region' => 'Unknown', 
+            'city' => 'Unknown',
+            'flag' => '🌍',
+            'error' => 'Invalid geo data'
+        ];
+    }
+    
+    // Mapear códigos de país para bandeiras (emoji)
+    $countryFlags = [
+        'BR' => '🇧🇷', 'US' => '🇺🇸', 'CA' => '🇨🇦', 'MX' => '🇲🇽',
+        'AR' => '🇦🇷', 'CL' => '🇨🇱', 'CO' => '🇨🇴', 'PE' => '🇵🇪',
+        'GB' => '🇬🇧', 'FR' => '🇫🇷', 'DE' => '🇩🇪', 'IT' => '🇮🇹',
+        'ES' => '🇪🇸', 'PT' => '🇵🇹', 'NL' => '🇳🇱', 'BE' => '🇧🇪',
+        'CH' => '🇨🇭', 'AT' => '🇦🇹', 'SE' => '🇸🇪', 'NO' => '🇳🇴',
+        'DK' => '🇩🇰', 'FI' => '🇫🇮', 'IS' => '🇮🇸', 'IE' => '🇮🇪',
+        'PL' => '🇵🇱', 'CZ' => '🇨🇿', 'SK' => '🇸🇰', 'HU' => '🇭🇺',
+        'RO' => '🇷🇴', 'BG' => '🇧🇬', 'HR' => '🇭🇷', 'SI' => '🇸🇮',
+        'RS' => '🇷🇸', 'BA' => '🇧🇦', 'MK' => '🇲🇰', 'AL' => '🇦🇱',
+        'GR' => '🇬🇷', 'TR' => '🇹🇷', 'RU' => '🇷🇺', 'UA' => '🇺🇦',
+        'BY' => '🇧🇾', 'LT' => '🇱🇹', 'LV' => '🇱🇻', 'EE' => '🇪🇪',
+        'JP' => '🇯🇵', 'CN' => '🇨🇳', 'KR' => '🇰🇷', 'IN' => '🇮🇳',
+        'TH' => '🇹🇭', 'VN' => '🇻🇳', 'ID' => '🇮🇩', 'MY' => '🇲🇾',
+        'SG' => '🇸🇬', 'PH' => '🇵🇭', 'TW' => '🇹🇼', 'HK' => '🇭🇰',
+        'AU' => '🇦🇺', 'NZ' => '🇳🇿', 'ZA' => '🇿🇦', 'EG' => '🇪🇬',
+        'NG' => '🇳🇬', 'KE' => '🇰🇪', 'MA' => '🇲🇦', 'SA' => '🇸🇦',
+        'AE' => '🇦🇪', 'IL' => '🇮🇱', 'IR' => '🇮🇷', 'IQ' => '🇮🇶',
+        'PK' => '🇵🇰', 'BD' => '🇧🇩', 'AF' => '🇦🇫', 'KZ' => '🇰🇿',
+        'UZ' => '🇺🇿', 'MN' => '🇲🇳', 'AM' => '🇦🇲', 'GE' => '🇬🇪',
+        'AZ' => '🇦🇿', 'LB' => '🇱🇧', 'JO' => '🇯🇴', 'SY' => '🇸🇾'
+    ];
+    
+    $countryCode = $geoData['countryCode'] ?? 'XX';
+    $flag = $countryFlags[$countryCode] ?? '🌍';
+    
+    $result = [
+        'ip' => $ip,
+        'country' => $geoData['country'] ?? 'Unknown',
+        'countryCode' => $countryCode,
+        'region' => $geoData['regionName'] ?? 'Unknown',
+        'city' => $geoData['city'] ?? 'Unknown',
+        'lat' => $geoData['lat'] ?? null,
+        'lon' => $geoData['lon'] ?? null,
+        'timezone' => $geoData['timezone'] ?? null,
+        'isp' => $geoData['isp'] ?? null,
+        'org' => $geoData['org'] ?? null,
+        'flag' => $flag,
+        'fetchedAt' => time()
+    ];
+    
+    saveLog("🌍 Dados geográficos obtidos para IP $ip: {$result['flag']} {$result['country']}, {$result['city']}");
+    
+    return $result;
+}
+
+// Função para obter o IP público real da máquina
+function getRealPublicIP() {
+    $services = [
+        'https://api.ipify.org',
+        'https://icanhazip.com',
+        'https://ipecho.net/plain',
+        'https://checkip.amazonaws.com'
+    ];
+    
+    foreach ($services as $service) {
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 3,
+                'user_agent' => 'Expo Analytics Server/1.0'
+            ]
+        ]);
+        
+        $ip = @file_get_contents($service, false, $context);
+        
+        if ($ip !== false) {
+            $ip = trim($ip);
+            // Validar se é um IP válido
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                return $ip;
+            }
+        }
+    }
+    
+    return null;
 }
 
 saveLog("Request completed");
