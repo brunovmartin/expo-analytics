@@ -45,6 +45,18 @@ declare class ExpoAnalyticsModule extends NativeModule<ExpoAnalyticsModuleEvents
    * Atualiza as informações do usuário
    */
   updateUserInfo(userData?: Record<string, any>): Promise<void>;
+  
+  /**
+   * Captura screenshot manual e envia para o servidor
+   */
+  takeScreenshot(width?: number, height?: number, compression?: number): Promise<{
+    success: boolean;
+    message?: string;
+    width?: number;
+    height?: number;
+    size?: number;
+    error?: string;
+  }>;
 }
 
 // This call loads the native module object from the JSI.

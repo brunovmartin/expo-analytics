@@ -3,7 +3,7 @@
 # Script para iniciar o servidor PHP local
 # Uso: ./start-server.sh (executar da pasta backend)
 
-IP="192.168.18.4"
+IP="localhost"
 PORT="8080"
 
 echo "🚀 Iniciando servidor PHP Analytics..."

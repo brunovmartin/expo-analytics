@@ -632,6 +632,8 @@ cd backend && php tests/testar-sessoes.php
 ✅ Assets CSS/JS               PASS
 ✅ Player de vídeo             PASS
 ✅ Servidor de imagens         PASS
+✅ takeScreenshot() method     PASS
+✅ Swift warnings corrigidos   PASS
 ```
 
 ---
@@ -673,6 +675,34 @@ if (!result.success) {
 // http://localhost:8080/dashboard -> aba Screenshots
 ```
 
+#### ❌ Erro de HTTP Request no takeScreenshot
+```typescript
+// PROBLEMA: Conflito de hosts
+// App.tsx: 'http://192.168.x.x:8080'  
+// Backend: localhost:8080
+
+// SOLUÇÃO: Usar o mesmo host em ambos
+const apiHost = 'http://localhost:8080'; // Para simulator
+// ou
+const apiHost = 'http://192.168.1.100:8080'; // Para dispositivo físico
+```
+
+### **Para Dispositivo Físico**
+
+```bash
+# 1. Descobrir seu IP local
+ifconfig | grep "inet " | grep -v 127.0.0.1
+
+# 2. Atualizar backend/start-server.sh
+IP="192.168.1.100"  # Seu IP local
+
+# 3. Atualizar example/App.tsx
+const [apiHost, setApiHost] = useState('http://192.168.1.100:8080');
+
+# 4. Iniciar servidor público
+cd backend && php -S 0.0.0.0:8080 api-receiver.php
+```
+
 #### ❌ Dados não persistem
 ```bash
 # Verificar logs do servidor
@@ -694,6 +724,24 @@ await ExpoAnalytics.init({
 // Verificar configuração atual
 const config = await ExpoAnalytics.getConfig();
 console.log('Configuração atual:', config);
+```
+
+### ⚠️ **Warnings Swift Corrigidos**
+
+Os seguintes warnings de compilação Swift foram resolvidos:
+
+```swift
+// ✅ CORRIGIDO: @Sendable closure warnings
+// Problema: capture of 'self' with non-sendable type in @Sendable closure
+// Solução: Captura de propriedades específicas ao invés de 'self' inteiro
+
+// ✅ CORRIGIDO: Variável não utilizada
+// Problema: immutable value 'data' was never used
+// Solução: Substituído por '_' para ignorar valor de retorno
+
+// ✅ CORRIGIDO: Concorrência Swift
+// Problema: Threading safety em closures assíncronas
+// Solução: Uso de @MainActor para garantir execução na main thread
 ```
 
 ---
