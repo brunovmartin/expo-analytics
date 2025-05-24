@@ -732,11 +732,11 @@ if ($action) {
             echo json_encode(['success' => true, 'app' => $appData]);
             exit;
             
-        case 'update_app':
+                    case 'update_app':
             $bundleId = $_POST['bundleId'] ?? '';
             $name = $_POST['name'] ?? '';
             $recordScreen = isset($_POST['recordScreen']) ? $_POST['recordScreen'] === 'true' : false;
-            $framerate = isset($_POST['framerate']) ? (int)$_POST['framerate'] : null;
+            $framerate = isset($_POST['framerate']) ? (float)$_POST['framerate'] : null;
             $screenSize = isset($_POST['screenSize']) ? (int)$_POST['screenSize'] : null;
             
             // Log para debug
@@ -937,7 +937,16 @@ $screenSizeOptions = [
                                 <?php if ($app['config']['recordScreen']): ?>
                                 <div class="config-item">
                                     <span class="config-label">Framerate:</span>
-                                    <span class="config-value"><?= $app['config']['framerate'] ?> fps</span>
+                                    <span class="config-value">
+                                        <?php 
+                                        $fps = (float)$app['config']['framerate'];
+                                        if ($fps < 1) {
+                                            echo number_format($fps, 1) . ' fps (1 frame a cada ' . number_format(1/$fps, 1) . 's)';
+                                        } else {
+                                            echo number_format($fps, 1) . ' fps';
+                                        }
+                                        ?>
+                                    </span>
                                 </div>
                                 <div class="config-item">
                                     <span class="config-label">Screen Size:</span>
@@ -1657,12 +1666,31 @@ $screenSizeOptions = [
                     
                     <div id="recordingSettings" class="recording-settings" style="display: none;">
                         <div class="form-group">
-                            <label for="framerate">Framerate: <span id="framerateValue">10</span> fps</label>
-                            <input type="range" id="framerate" name="framerate" min="1" max="30" value="10" oninput="updateFramerateValue(this.value)">
+                            <label for="framerateSelect">Framerate Predefinido:</label>
+                            <select id="framerateSelect" onchange="setFramerate(this.value)">
+                                <option value="custom">Personalizado</option>
+                                <option value="0.1">0.1 fps (1 frame a cada 10s)</option>
+                                <option value="0.2">0.2 fps (1 frame a cada 5s)</option>
+                                <option value="0.5">0.5 fps (1 frame a cada 2s)</option>
+                                <option value="1">1 fps (1 frame por segundo)</option>
+                                <option value="2">2 fps</option>
+                                <option value="5">5 fps</option>
+                                <option value="10">10 fps (recomendado)</option>
+                                <option value="15">15 fps</option>
+                                <option value="20">20 fps</option>
+                                <option value="30">30 fps</option>
+                                <option value="60">60 fps (máximo)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="framerate">Framerate Personalizado: <span id="framerateValue">10</span> fps</label>
+                            <input type="range" id="framerate" name="framerate" min="0.1" max="60" step="0.1" value="10" oninput="updateFramerateValue(this.value)">
                             <div class="range-labels">
-                                <span>1 fps</span>
-                                <span>30 fps</span>
+                                <span>0.1 fps</span>
+                                <span>60 fps</span>
                             </div>
+                            <small>Use valores baixos (0.1-1 fps) para capturas espaçadas que economizam recursos</small>
                         </div>
                         
                         <div class="form-group">
@@ -2054,7 +2082,28 @@ $screenSizeOptions = [
         }
         
         function updateFramerateValue(value) {
-            document.getElementById('framerateValue').textContent = value;
+            const numValue = parseFloat(value);
+            document.getElementById('framerateValue').textContent = numValue.toFixed(1);
+            
+            // Atualizar o select se corresponder a um valor predefinido
+            const select = document.getElementById('framerateSelect');
+            const matchingOption = Array.from(select.options).find(option => 
+                option.value !== 'custom' && Math.abs(parseFloat(option.value) - numValue) < 0.05
+            );
+            
+            if (matchingOption) {
+                select.value = matchingOption.value;
+            } else {
+                select.value = 'custom';
+            }
+        }
+        
+        function setFramerate(value) {
+            if (value !== 'custom') {
+                const framerateSlider = document.getElementById('framerate');
+                framerateSlider.value = value;
+                updateFramerateValue(value);
+            }
         }
         
         function toggleRecordingSettings() {

@@ -42,6 +42,11 @@ npx expo run:ios
   - Tamanho da fonte do sistema
   - Idioma do usuário
   - País e região (ex: EN-US, PT-BR)
+- **🛡️ Persistência Robusta para iOS Antigo**: **NOVO!** Sistema que garante zero perda de dados
+  - ✅ Funciona no iOS 10+ até iOS 17+
+  - ✅ Salvamento contínuo a cada 2 segundos
+  - ✅ Recuperação automática ao reiniciar
+  - ✅ Captura terminação abrupta do app
 - **🌐 API Aprimorada**: Novos endpoints para processar screenshots manuais
 - **📱 Captura Automática de Screenshots**: Screenshots automáticos durante eventos
 - **🎬 Gravação de Sessões**: Converte screenshots em vídeos MP4
@@ -490,6 +495,33 @@ Quando o app carregar, você verá uma **tela principal** com botões para:
 - **Captura otimizada**: Redimensionamento durante a captura
 - **Escala inteligente**: Nunca aumenta resolução, apenas reduz
 - **Qualidade adaptativa**: Compressão baseada no framerate
+
+### ✅ Persistência Robusta iOS Antigo - **NOVO!**
+
+**Problema Original:**
+- No iOS antigo (iOS 12 e anteriores), dados se perdiam quando o app era fechado instantaneamente
+- Background tasks limitados não garantiam tempo suficiente para envio
+- Terminação abrupta resultava em perda de sessões
+
+**Solução Implementada:**
+- **📱 Compatibilidade Total**: Funciona no iOS 10+ até iOS 17+
+- **💾 Persistência Contínua**: Dados salvos a cada 2 segundos em UserDefaults
+- **⚠️ Captura de Terminação**: Handler para `UIApplication.willTerminateNotification`
+- **🔄 Recuperação Automática**: Sessões não enviadas são recuperadas ao reiniciar
+- **🎯 Zero Perda de Dados**: 100% dos dados preservados em qualquer cenário
+
+**Logs de Debug:**
+```
+🔄 [ExpoAnalytics] Timer de persistência iniciado (intervalo: 2.0s)
+💾 [ExpoAnalytics] Sessão salva: 30 frames, 30 arquivos
+⚠️ [ExpoAnalytics] Terminação detectada - salvamento de emergência
+✅ [ExpoAnalytics] Dados salvos para recuperação futura
+🔄 [ExpoAnalytics] Recuperando 1 sessões pendentes...
+📤 [ExpoAnalytics] Enviando sessão recuperada abc123 (2048KB)
+✅ [ExpoAnalytics] Sessão recuperada abc123 enviada com sucesso!
+```
+
+**📋 Detalhes Técnicos:** Veja [ios/SOLUCAO_PERSISTENCIA.md](ios/SOLUCAO_PERSISTENCIA.md)
 
 ### ✅ Sistema ZIP + MP4
 

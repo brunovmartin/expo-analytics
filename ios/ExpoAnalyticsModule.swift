@@ -31,6 +31,56 @@ extension Date {
     }
 }
 
+// MARK: - Estruturas para Persistência
+struct PersistentSessionData: Codable {
+    let sessionId: String
+    let userId: String
+    let apiHost: String
+    let userData: [String: AnyCodable]
+    let startTime: String
+    let frameCount: Int
+    let screenshotPaths: [String]
+    let lastSaveTime: String
+    
+    struct AnyCodable: Codable {
+        let value: Any
+        
+        init(_ value: Any) {
+            self.value = value
+        }
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let string = try? container.decode(String.self) {
+                value = string
+            } else if let int = try? container.decode(Int.self) {
+                value = int
+            } else if let double = try? container.decode(Double.self) {
+                value = double
+            } else if let bool = try? container.decode(Bool.self) {
+                value = bool
+            } else {
+                value = "unknown"
+            }
+        }
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            if let string = value as? String {
+                try container.encode(string)
+            } else if let int = value as? Int {
+                try container.encode(int)
+            } else if let double = value as? Double {
+                try container.encode(double)
+            } else if let bool = value as? Bool {
+                try container.encode(bool)
+            } else {
+                try container.encode(String(describing: value))
+            }
+        }
+    }
+}
+
 // Estrutura para criar ZIP manual (formato simplificado mas funcional)
 struct ZipLocalFileHeader {
     static let signature: UInt32 = 0x04034b50
@@ -135,7 +185,7 @@ extension UIWindow {
 
 public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   private var displayLink: CADisplayLink?
-  private var framerate: Int = 30
+  private var framerate: Double = 10.0 // Mudado para Double para aceitar valores decimais
   private var frameCount: Int = 0
   private var screenSize: CGSize = CGSize(width: 480, height: 960)
   private var recordScreenEnabled: Bool = false
@@ -156,6 +206,14 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   
   // Background task para garantir upload completo
   private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+  
+  // PERSISTÊNCIA CONTÍNUA - funciona em iOS antigo e novo
+  private var persistenceTimer: Timer?
+  private var screenshotPaths: [String] = []
+  private let persistenceKey = "ExpoAnalytics_SessionData"
+  private let recoveryKey = "ExpoAnalytics_PendingSessions"
+  private var lastPersistTime: Date = Date()
+  private let persistenceInterval: TimeInterval = 2.0 // Salvar a cada 2 segundos
 
   private let screenshotsFolder: URL = {
     let tmp = FileManager.default.temporaryDirectory
@@ -167,10 +225,38 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   public func definition() -> ModuleDefinition {
     Name("ExpoAnalytics")
 
-    // Detectar quando o app vai para background - ENVIAR SESSÃO COMPLETA
+    // NOVO: Adicionar observer para terminação do app (iOS antigo e novo)
+    OnCreate {
+      NotificationCenter.default.addObserver(
+        forName: UIApplication.willTerminateNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        NSLog("⚠️ [ExpoAnalytics] App sendo terminado - salvamento de emergência")
+        self?.handleAppTermination()
+      }
+      
+      // Recuperar sessões pendentes ao iniciar
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        self?.recoverPendingSessions()
+      }
+    }
+    
+    OnDestroy {
+      // Limpar observers e timers
+      NotificationCenter.default.removeObserver(self)
+      self.persistenceTimer?.invalidate()
+      self.persistenceTimer = nil
+    }
+
+    // Detectar quando o app vai para background - SALVAR E ENVIAR SESSÃO
     OnAppEntersBackground {
-      NSLog("🔄 [ExpoAnalytics] App entrando em background - finalizando sessão")
+      NSLog("🔄 [ExpoAnalytics] App entrando em background - salvando e finalizando sessão")
       if self.recordScreenEnabled && self.frameCount > 0 {
+        // PRIMEIRO: Salvar dados localmente (instantâneo)
+        self.persistCurrentSessionSync()
+        
+        // DEPOIS: Tentar enviar em background
         self.startBackgroundTask()
         self.finishCurrentSession()
       }
@@ -263,7 +349,16 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       
       // Aplicar configurações
       self.recordScreenEnabled = serverConfig["recordScreen"] as? Bool ?? false
-      self.framerate = min(max(serverConfig["framerate"] as? Int ?? 10, 1), 15) // Limite: 1-15 FPS
+      
+      // Suporte a framerate decimal (0.1 a 60 fps)
+      if let framerateDouble = serverConfig["framerate"] as? Double {
+        self.framerate = max(min(framerateDouble, 60.0), 0.1) // Limite: 0.1-60 FPS
+      } else if let framerateInt = serverConfig["framerate"] as? Int {
+        self.framerate = max(min(Double(framerateInt), 60.0), 0.1) // Compatibilidade com Int
+      } else {
+        self.framerate = 10.0 // Padrão
+      }
+      
       if let size = serverConfig["screenSize"] as? Int {
         // Manter proporção de 1:2 (largura:altura)
         self.screenSize = CGSize(width: size, height: size * 2)
@@ -271,8 +366,10 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       
       // Aplicar overrides das opções se fornecidas
       if let config = options {
-        if let fps = config["framerate"] as? Int { 
-          self.framerate = min(max(fps, 1), 15) // Limite: 1-15 FPS
+        if let fpsDouble = config["framerate"] as? Double {
+          self.framerate = max(min(fpsDouble, 60.0), 0.1) // Limite: 0.1-60 FPS
+        } else if let fpsInt = config["framerate"] as? Int {
+          self.framerate = max(min(Double(fpsInt), 60.0), 0.1) // Compatibilidade com Int
         }
         if let size = config["screenSize"] as? Int {
           self.screenSize = CGSize(width: size, height: size * 2)
@@ -280,11 +377,11 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       }
       
       // Calcular intervalo otimizado
-      self.targetFrameInterval = 1.0 / Double(self.framerate)
+      self.targetFrameInterval = 1.0 / self.framerate
 
       NSLog("🔧 [ExpoAnalytics] Configurações aplicadas:")
       NSLog("   Record Screen: \(self.recordScreenEnabled)")
-      NSLog("   Framerate: \(self.framerate) fps (intervalo: \(String(format: "%.3f", self.targetFrameInterval))s)")
+      NSLog("   Framerate: \(String(format: "%.1f", self.framerate)) fps (intervalo: \(String(format: "%.3f", self.targetFrameInterval))s)")
       NSLog("   Screen Size: \(Int(self.screenSize.width))x\(Int(self.screenSize.height))")
       NSLog("   Device: \(self.userData["device"] ?? "unknown")")
       NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
@@ -442,8 +539,12 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     self.currentSessionId = UUID().uuidString
     self.sessionStartTime = Date()
     self.frameCount = 0
+    self.screenshotPaths = []
     
     NSLog("🆕 [ExpoAnalytics] Nova sessão iniciada: \(self.currentSessionId)")
+    
+    // Iniciar persistência contínua
+    startPersistenceTimer()
   }
   
   private func finishCurrentSession() {
@@ -456,6 +557,14 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     NSLog("📤 [ExpoAnalytics] Finalizando sessão \(self.currentSessionId)")
     NSLog("   Duração: \(String(format: "%.1f", sessionDuration))s")
     NSLog("   Frames: \(self.frameCount)")
+    
+    // Parar timer de persistência
+    persistenceTimer?.invalidate()
+    persistenceTimer = nil
+    
+    // Salvar sessão final antes de enviar
+    persistCurrentSessionSync()
+    savePendingSession()
     
     // Enviar sessão completa
     self.sendCurrentSession()
@@ -490,7 +599,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   private func defaultConfig() -> [String: Any] {
     return [
       "recordScreen": false,
-      "framerate": 10,
+      "framerate": 10.0,
       "screenSize": 480
     ]
   }
@@ -506,20 +615,25 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     
     // Calcular framerate inteligente do DisplayLink
     let idealDisplayFramerate: Int
-    if self.framerate <= 5 {
-        idealDisplayFramerate = 15  // 3x para suavidade
-    } else if self.framerate <= 15 {
-        idealDisplayFramerate = self.framerate * 2  // 2x para suavidade
+    if self.framerate >= 30.0 {
+        idealDisplayFramerate = min(Int(self.framerate) + 10, 60)  // Máximo 60fps para framerates altos
+    } else if self.framerate >= 5.0 {
+        idealDisplayFramerate = Int(self.framerate) * 2  // 2x para framerates médios
+    } else if self.framerate >= 1.0 {
+        idealDisplayFramerate = 15  // Fixo 15fps para framerates baixos (1-5 fps)
     } else {
-        idealDisplayFramerate = min(self.framerate + 10, 60)  // Máximo 60fps
+        idealDisplayFramerate = 10  // Fixo 10fps para framerates muito baixos (<1 fps)
     }
     
     self.displayLink?.preferredFramesPerSecond = idealDisplayFramerate
     self.displayLink?.add(to: .main, forMode: .common)
     
     NSLog("🎬 [ExpoAnalytics] Captura OTIMIZADA iniciada:")
-    NSLog("   Target: \(self.framerate) fps")
+    NSLog("   Target: \(String(format: "%.1f", self.framerate)) fps")
     NSLog("   DisplayLink: \(idealDisplayFramerate) fps")
+    if self.framerate < 1.0 {
+        NSLog("   ⚠️ Framerate muito baixo: um frame a cada \(String(format: "%.1f", 1.0/self.framerate)) segundos")
+    }
   }
   
   private func stopCapture() {
@@ -552,93 +666,72 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
 
     DispatchQueue.main.sync {
-        // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+        // Capturar TODAS as janelas visíveis (incluindo alertas)
         let allWindows = windowScene.windows.filter { $0.isHidden == false }
         guard !allWindows.isEmpty else { return }
         
-        // Log de debug para mostrar janelas being capturadas
-        if frameCount % 60 == 0 { // Log apenas ocasionalmente para não sobrecarregar
-        NSLog("🔍 [ExpoAnalytics] Capturando \(allWindows.count) janelas:")
-        for (index, window) in allWindows.enumerated() {
-            NSLog("   \(index + 1). \(window.analyticsDebugDescription)")
-        }
-        }
+        // Log de debug COMENTADO PARA PERFORMANCE
+        // if frameCount % 60 == 0 {
+        //   NSLog("🔍 [ExpoAnalytics] Capturando \(allWindows.count) janelas:")
+        //   for (index, window) in allWindows.enumerated() {
+        //       NSLog("   \(index + 1). \(window.analyticsDebugDescription)")
+        //   }
+        // }
         
         // Pegar a janela principal para obter as dimensões
         let mainWindow = allWindows.first { $0.isKeyWindow } ?? allWindows.first!
         let originalBounds = mainWindow.bounds
     
-        // Calcular escala para reduzir a resolução desde o início
-        let targetSize = self.screenSize
-        let scaleX = targetSize.width / originalBounds.width
-        let scaleY = targetSize.height / originalBounds.height
-    
-        // Criar contexto com o tamanho alvo já reduzido
-        UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0) // Scale fixo 1.0
-        
-        guard let context = UIGraphicsGetCurrentContext() else {
-        NSLog("❌ [ExpoAnalytics] Erro ao criar contexto gráfico")
-        return
-        }
-        
-        // Aplicar transformação para redimensionar durante a captura
-        context.scaleBy(x: scaleX, y: scaleY)
-        
-        // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
-        let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
-        
-        for window in sortedWindows {
-        window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
-        }
-        
-        let capturedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-
-        guard let image = capturedImage else { 
-        NSLog("❌ [ExpoAnalytics] Erro ao capturar screenshot")
-        return 
+        // PERFORMANCE: Capturar em resolução nativa sem redimensionamento
+        // Usar UIGraphicsImageRenderer para melhor performance
+        let renderer = UIGraphicsImageRenderer(bounds: originalBounds)
+        let capturedImage = renderer.image { context in
+            // Renderizar todas as janelas visíveis em ordem de windowLevel
+            let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+            
+            for window in sortedWindows {
+                window.drawHierarchy(in: originalBounds, afterScreenUpdates: false)
+            }
         }
     
-        // Processar imagem em background
+        // Processar imagem em background sem compressão pesada
         captureQueue.async { [weak self] in
-        self?.processAndSaveImage(image)
+        self?.processAndSaveImageFast(capturedImage)
         }
+
     }
     }
   
-  private func processAndSaveImage(_ image: UIImage) {
-    // Comprimir com qualidade ajustada baseada no framerate
-    let quality: CGFloat = self.framerate <= 5 ? 0.8 : self.framerate <= 10 ? 0.7 : 0.6
-    guard let compressedData = image.jpegData(compressionQuality: quality) else {
-      NSLog("❌ [ExpoAnalytics] Erro ao comprimir imagem")
+  private func processAndSaveImageFast(_ image: UIImage) {
+    // PERFORMANCE: JPEG sem compressão para máxima velocidade
+    guard let imageData = image.jpegData(compressionQuality: 1.0) else {
       return
     }
     
-    // Verificar tamanho final da imagem
-    let finalSize = compressedData.count
     let timestamp = Int(Date().timeIntervalSince1970 * 1000)
     
-    // Log apenas ocasionalmente para não sobrecarregar
-    if frameCount % 30 == 0 {
-      NSLog("📸 [ExpoAnalytics] Screenshot \(frameCount): \(Int(screenSize.width))×\(Int(screenSize.height)), \(finalSize/1024)KB, Q:\(Int(quality*100))%")
-    }
+    // Log COMENTADO PARA PERFORMANCE
+    // let finalSize = imageData.count
+    // if frameCount % 30 == 0 {
+    //   let bounds = UIScreen.main.bounds
+    //   NSLog("📸 [ExpoAnalytics] Screenshot \(frameCount): \(Int(bounds.width))×\(Int(bounds.height)), \(finalSize/1024)KB, JPEG")
+    // }
     
     // Salvar arquivo temporário com nome sequencial para ordenação correta
     let filename = screenshotsFolder.appendingPathComponent("frame_\(String(format: "%06d", frameCount))_\(timestamp).jpg")
     do {
-      try compressedData.write(to: filename)
+      try imageData.write(to: filename)
+      
+      // Adicionar caminho à lista para persistência
+      screenshotPaths.append(filename.path)
       frameCount += 1
-      
-      // REMOVIDO: Não enviar baseado em número de frames
-      // Agora só envia quando o app vai para background ou stop() é chamado
-      
     } catch {
-      NSLog("❌ [ExpoAnalytics] Erro ao salvar frame: \(error)")
+      // Erro silencioso para performance
     }
   }
 
   private func sendCurrentSession() {
-    NSLog("🔄 [ExpoAnalytics] Enviando sessão atual com \(frameCount) frames...")
+    // NSLog("🔄 [ExpoAnalytics] Enviando sessão atual com \(frameCount) frames...")
     
     let sessionDuration = Date().timeIntervalSince(self.sessionStartTime ?? Date())
     
@@ -654,17 +747,17 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     ]
 
     guard let url = URL(string: self.apiHost + "/upload-zip") else { 
-      NSLog("❌ [ExpoAnalytics] URL inválida: \(self.apiHost)")
+      // NSLog("❌ [ExpoAnalytics] URL inválida: \(self.apiHost)")
       return 
     }
     
     // Criar arquivo ZIP com as imagens
     guard let zipData = createZipFromScreenshots() else {
-      NSLog("❌ [ExpoAnalytics] Falha ao criar arquivo ZIP")
+      // NSLog("❌ [ExpoAnalytics] Falha ao criar arquivo ZIP")
       return
     }
     
-    NSLog("📦 [ExpoAnalytics] ZIP da sessão criado: \(zipData.count/1024/1024)MB")
+    // NSLog("📦 [ExpoAnalytics] ZIP da sessão criado: \(zipData.count/1024/1024)MB")
     
     // Criar requisição multipart
     let boundary = "Boundary-\(UUID().uuidString)"
@@ -692,9 +785,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     
     request.httpBody = body
       
-      let startTime = Date()
       URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-        let duration = Date().timeIntervalSince(startTime)
         
         defer {
           // SEMPRE finalizar background task ao completar upload
@@ -703,26 +794,29 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
           }
         }
         
-        if let error = error {
-        NSLog("❌ [ExpoAnalytics] Erro no upload da sessão: \(error.localizedDescription)")
+        if let _ = error {
+        // NSLog("❌ [ExpoAnalytics] Erro no upload da sessão: \(error.localizedDescription)")
         } else if let httpResponse = response as? HTTPURLResponse {
           let statusCode = httpResponse.statusCode
-          let responseSize = data?.count ?? 0
+          // let responseSize = data?.count ?? 0
           
-        NSLog("✅ [ExpoAnalytics] Upload da sessão concluído em \(String(format: "%.1f", duration))s")
-          NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
+        // NSLog("✅ [ExpoAnalytics] Upload da sessão concluído em \(String(format: "%.1f", duration))s")
+          // NSLog("📡 [ExpoAnalytics] Status: \(statusCode), Resposta: \(responseSize) bytes")
           
           if statusCode == 200 {
-          NSLog("🎉 [ExpoAnalytics] Sessão \(self?.currentSessionId ?? "unknown") enviada com sucesso!")
+          // NSLog("🎉 [ExpoAnalytics] Sessão \(self?.currentSessionId ?? "unknown") enviada com sucesso!")
             
             // Limpar screenshots locais apenas se upload foi bem-sucedido
           DispatchQueue.main.async { [weak self] in
             guard let strongSelf = self else { return }
               strongSelf.clearLocalScreenshots()
               strongSelf.frameCount = 0
+              
+              // Remover da lista de pendentes se envio foi bem-sucedido
+              strongSelf.removePendingSession(sessionId: strongSelf.currentSessionId)
             }
           } else {
-          NSLog("⚠️ [ExpoAnalytics] Upload da sessão com status não-200, mantendo arquivos locais")
+          // NSLog("⚠️ [ExpoAnalytics] Upload da sessão com status não-200, mantendo arquivos locais")
           }
         }
       }.resume()
@@ -737,18 +831,18 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     let fileManager = FileManager.default
     
     guard let files = try? fileManager.contentsOfDirectory(at: screenshotsFolder, includingPropertiesForKeys: nil) else {
-      NSLog("❌ [ExpoAnalytics] Erro ao listar arquivos")
+      // NSLog("❌ [ExpoAnalytics] Erro ao listar arquivos")
       return nil
     }
     
     let jpgFiles = files.filter { $0.pathExtension == "jpg" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     
     guard !jpgFiles.isEmpty else {
-      NSLog("⚠️ [ExpoAnalytics] Nenhuma imagem encontrada para criar ZIP")
+      // NSLog("⚠️ [ExpoAnalytics] Nenhuma imagem encontrada para criar ZIP")
       return nil
     }
     
-    NSLog("📸 [ExpoAnalytics] Criando ZIP com \(jpgFiles.count) imagens...")
+    // NSLog("📸 [ExpoAnalytics] Criando ZIP com \(jpgFiles.count) imagens...")
     
     // Preparar arrays para createZipData
     var filePaths: [String] = []
@@ -761,11 +855,11 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     
     // Criar o ZIP real
     guard let zipData = createZipData(filePaths: filePaths, fileNames: fileNames) else {
-      NSLog("❌ [ExpoAnalytics] Erro ao criar ZIP real")
+      // NSLog("❌ [ExpoAnalytics] Erro ao criar ZIP real")
       return nil
     }
     
-    NSLog("✅ [ExpoAnalytics] ZIP real criado com sucesso: \(zipData.count/1024)KB")
+    // NSLog("✅ [ExpoAnalytics] ZIP real criado com sucesso: \(zipData.count/1024)KB")
     return zipData
   }
   
@@ -895,7 +989,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     
     endOfCentralDir.write(to: &zipData)
     
-    NSLog("📦 [ExpoAnalytics] ZIP real criado com \(centralDirectoryEntries.count) arquivos, tamanho: \(zipData.count) bytes")
+    // NSLog("📦 [ExpoAnalytics] ZIP real criado com \(centralDirectoryEntries.count) arquivos, tamanho: \(zipData.count) bytes")
     
     return zipData
   }
@@ -903,18 +997,18 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   private func clearLocalScreenshots() {
     let fileManager = FileManager.default
     if let files = try? fileManager.contentsOfDirectory(at: screenshotsFolder, includingPropertiesForKeys: nil) {
-      let removedCount = files.filter { $0.pathExtension == "jpg" }.count
+      // let removedCount = files.filter { $0.pathExtension == "jpg" }.count
       
       for file in files where file.pathExtension == "jpg" {
         try? fileManager.removeItem(at: file)
       }
       
-      NSLog("🧹 [ExpoAnalytics] \(removedCount) arquivos locais removidos")
+      // NSLog("🧹 [ExpoAnalytics] \(removedCount) arquivos locais removidos")
     }
   }
 
   private func sendUserInfoPayload() {
-    NSLog("👤 [ExpoAnalytics] Cadastrando usuário automaticamente no sistema...")
+    // NSLog("👤 [ExpoAnalytics] Cadastrando usuário automaticamente no sistema...")
     
     let payload: [String: Any] = [
       "userId": self.userId,
@@ -923,7 +1017,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     ]
 
     guard let url = URL(string: self.apiHost + "/init") else { 
-      NSLog("❌ [ExpoAnalytics] URL inválida para cadastro: \(self.apiHost)")
+      // NSLog("❌ [ExpoAnalytics] URL inválida para cadastro: \(self.apiHost)")
       return 
     }
     
@@ -935,26 +1029,26 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       let jsonData = try JSONSerialization.data(withJSONObject: payload)
       request.httpBody = jsonData
       
-      NSLog("📤 [ExpoAnalytics] Enviando dados do usuário para cadastro:")
-      NSLog("   User ID: \(self.userId)")
-      NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
-      NSLog("   Device: \(self.userData["device"] ?? "unknown")")
-      NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
+      // NSLog("📤 [ExpoAnalytics] Enviando dados do usuário para cadastro:")
+      // NSLog("   User ID: \(self.userId)")
+      // NSLog("   Platform: \(self.userData["platform"] ?? "unknown")")
+      // NSLog("   Device: \(self.userData["device"] ?? "unknown")")
+      // NSLog("   App Version: \(self.userData["appVersion"] ?? "unknown")")
       
       URLSession.shared.dataTask(with: request) { data, response, error in
-        if let error = error {
-          NSLog("❌ [ExpoAnalytics] Erro no cadastro do usuário: \(error.localizedDescription)")
+        if let _ = error {
+          // NSLog("❌ [ExpoAnalytics] Erro no cadastro do usuário: \(error.localizedDescription)")
         } else if let httpResponse = response as? HTTPURLResponse {
           let statusCode = httpResponse.statusCode
           if statusCode == 200 {
-            NSLog("✅ [ExpoAnalytics] Usuário cadastrado com sucesso no sistema!")
+            // NSLog("✅ [ExpoAnalytics] Usuário cadastrado com sucesso no sistema!")
           } else {
-            NSLog("⚠️ [ExpoAnalytics] Cadastro com status não-200: \(statusCode)")
+            // NSLog("⚠️ [ExpoAnalytics] Cadastro com status não-200: \(statusCode)")
           }
         }
       }.resume()
     } catch {
-      NSLog("❌ [ExpoAnalytics] Erro ao serializar dados do usuário: \(error)")
+      // NSLog("❌ [ExpoAnalytics] Erro ao serializar dados do usuário: \(error)")
     }
   }
   
@@ -962,26 +1056,26 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
   
   private func startBackgroundTask() {
     guard backgroundTaskID == .invalid else {
-      NSLog("🔄 [ExpoAnalytics] Background task já está ativo")
+      // NSLog("🔄 [ExpoAnalytics] Background task já está ativo")
       return
     }
     
     backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "ExpoAnalyticsUpload") { [weak self] in
-      NSLog("⏰ [ExpoAnalytics] Background task expirou - finalizando...")
+      // NSLog("⏰ [ExpoAnalytics] Background task expirou - finalizando...")
       self?.endBackgroundTask()
     }
     
     if backgroundTaskID != .invalid {
-      NSLog("🎯 [ExpoAnalytics] Background task iniciado: \(backgroundTaskID.rawValue)")
+      // NSLog("🎯 [ExpoAnalytics] Background task iniciado: \(backgroundTaskID.rawValue)")
     } else {
-      NSLog("❌ [ExpoAnalytics] Falha ao iniciar background task")
+      // NSLog("❌ [ExpoAnalytics] Falha ao iniciar background task")
     }
   }
   
   private func endBackgroundTask() {
     guard backgroundTaskID != .invalid else { return }
     
-    NSLog("✅ [ExpoAnalytics] Finalizando background task: \(backgroundTaskID.rawValue)")
+    // NSLog("✅ [ExpoAnalytics] Finalizando background task: \(backgroundTaskID.rawValue)")
     UIApplication.shared.endBackgroundTask(backgroundTaskID)
     backgroundTaskID = .invalid
   }
@@ -1129,7 +1223,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
           return
         }
         
-        NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB (incluindo alertas)")
+        // NSLog("📸 Screenshot manual capturado: \(width)x\(height), \(imageData.count/1024)KB (incluindo alertas)")
         
         // Enviar screenshot para o servidor em background
         Task { @MainActor [weak self] in
@@ -1187,7 +1281,7 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     ]
     
     guard let url = URL(string: self.apiHost + "/take-screenshot") else {
-      NSLog("❌ [ExpoAnalytics] URL inválida para screenshot: \(self.apiHost)")
+      // NSLog("❌ [ExpoAnalytics] URL inválida para screenshot: \(self.apiHost)")
       return false
     }
     
@@ -1199,22 +1293,22 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       let jsonData = try JSONSerialization.data(withJSONObject: payload)
       request.httpBody = jsonData
       
-      NSLog("📤 [ExpoAnalytics] Enviando screenshot manual para servidor...")
+      // NSLog("📤 [ExpoAnalytics] Enviando screenshot manual para servidor...")
       
       let (_, response) = try await URLSession.shared.data(for: request)
       
       if let httpResponse = response as? HTTPURLResponse {
         let statusCode = httpResponse.statusCode
         if statusCode == 200 {
-          NSLog("✅ [ExpoAnalytics] Screenshot manual enviado com sucesso!")
+          // NSLog("✅ [ExpoAnalytics] Screenshot manual enviado com sucesso!")
           return true
         } else {
-          NSLog("⚠️ [ExpoAnalytics] Screenshot enviado com status não-200: \(statusCode)")
+          // NSLog("⚠️ [ExpoAnalytics] Screenshot enviado com status não-200: \(statusCode)")
           return false
         }
       }
     } catch {
-      NSLog("❌ [ExpoAnalytics] Erro ao enviar screenshot manual: \(error)")
+      // NSLog("❌ [ExpoAnalytics] Erro ao enviar screenshot manual: \(error)")
     }
     
     return false
@@ -1222,14 +1316,14 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
 
   private func captureScreenshotForEvent() -> Data? {
     guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { 
-      NSLog("❌ [ExpoAnalytics] Não foi possível acessar a cena da janela para capturar screenshot do evento")
+      // NSLog("❌ [ExpoAnalytics] Não foi possível acessar a cena da janela para capturar screenshot do evento")
       return nil 
     }
     
-    // MUDANÇA: Capturar TODAS as janelas visíveis (incluindo alertas)
+    // Capturar TODAS as janelas visíveis (incluindo alertas)
     let allWindows = windowScene.windows.filter { $0.isHidden == false }
     guard !allWindows.isEmpty else {
-      NSLog("❌ [ExpoAnalytics] Nenhuma janela visível encontrada para capturar screenshot do evento")
+      // NSLog("❌ [ExpoAnalytics] Nenhuma janela visível encontrada para capturar screenshot do evento")
       return nil
     }
     
@@ -1248,13 +1342,13 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
       UIGraphicsBeginImageContextWithOptions(eventScreenSize, false, 1.0)
       
       guard let context = UIGraphicsGetCurrentContext() else {
-        NSLog("❌ [ExpoAnalytics] Erro ao criar contexto para screenshot do evento")
+        // NSLog("❌ [ExpoAnalytics] Erro ao criar contexto para screenshot do evento")
         return
       }
       
       context.scaleBy(x: scaleX, y: scaleY)
       
-      // NOVA LÓGICA: Renderizar todas as janelas visíveis em ordem de windowLevel
+      // Renderizar todas as janelas visíveis em ordem de windowLevel
       let sortedWindows = allWindows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
       
       for window in sortedWindows {
@@ -1270,4 +1364,259 @@ public class ExpoAnalyticsModule: Module, @unchecked Sendable {
     // Comprimir com qualidade mais baixa para eventos (50%)
     return image.jpegData(compressionQuality: 0.5)
   }
+  
+  // MARK: - NOVA FUNCIONALIDADE: Sistema de Persistência Contínua
+  
+  /// Inicia timer de persistência para salvar dados continuamente
+  private func startPersistenceTimer() {
+    // Parar timer anterior se existir
+    persistenceTimer?.invalidate()
+    
+    // Criar novo timer que roda a cada 2 segundos
+    persistenceTimer = Timer.scheduledTimer(withTimeInterval: persistenceInterval, repeats: true) { [weak self] _ in
+      self?.persistCurrentSession()
+    }
+    
+    NSLog("🔄 [ExpoAnalytics] Timer de persistência iniciado (intervalo: \(persistenceInterval)s)")
+  }
+  
+  /// Salva dados da sessão atual em UserDefaults (não bloqueia UI)
+  private func persistCurrentSession() {
+    guard !currentSessionId.isEmpty && frameCount > 0 else { return }
+    
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      guard let self = self else { return }
+      self.persistCurrentSessionSync()
+    }
+  }
+  
+  /// Salva dados da sessão atual de forma síncrona
+  private func persistCurrentSessionSync() {
+    guard !currentSessionId.isEmpty else { return }
+    
+    // Converter userData para formato codificável
+    var codableUserData: [String: PersistentSessionData.AnyCodable] = [:]
+    for (key, value) in userData {
+      codableUserData[key] = PersistentSessionData.AnyCodable(value)
+    }
+    
+    let sessionData = PersistentSessionData(
+      sessionId: currentSessionId,
+      userId: userId,
+      apiHost: apiHost,
+      userData: codableUserData,
+      startTime: sessionStartTime?.toISOString() ?? Date().toISOString(),
+      frameCount: frameCount,
+      screenshotPaths: screenshotPaths,
+      lastSaveTime: Date().toISOString()
+    )
+    
+    do {
+      let data = try JSONEncoder().encode(sessionData)
+      UserDefaults.standard.set(data, forKey: persistenceKey)
+      lastPersistTime = Date()
+      
+      // Log apenas ocasionalmente para não spam
+      if frameCount % 30 == 0 {
+        NSLog("💾 [ExpoAnalytics] Sessão salva: \(frameCount) frames, \(screenshotPaths.count) arquivos")
+      }
+    } catch {
+      NSLog("❌ [ExpoAnalytics] Erro ao persistir sessão: \(error)")
+    }
+  }
+  
+  /// Manipula terminação abrupta do app (iOS antigo)
+  private func handleAppTermination() {
+    NSLog("⚠️ [ExpoAnalytics] Terminação detectada - salvamento de emergência")
+    
+    // 1. Parar captura imediatamente
+    displayLink?.invalidate()
+    displayLink = nil
+    persistenceTimer?.invalidate()
+    persistenceTimer = nil
+    
+    // 2. Salvar dados da sessão atual IMEDIATAMENTE
+    if !currentSessionId.isEmpty && frameCount > 0 {
+      persistCurrentSessionSync()
+      savePendingSession()
+    }
+    
+    // 3. Limpar observers
+    NotificationCenter.default.removeObserver(self)
+    
+    NSLog("✅ [ExpoAnalytics] Dados salvos para recuperação futura")
+  }
+  
+  /// Salva sessão atual na lista de sessões pendentes
+  private func savePendingSession() {
+    guard !currentSessionId.isEmpty && frameCount > 0 else { return }
+    
+    // Recuperar sessões pendentes existentes
+    var pendingSessions: [String] = UserDefaults.standard.array(forKey: recoveryKey) as? [String] ?? []
+    
+    // Adicionar sessão atual se não existir
+    if !pendingSessions.contains(currentSessionId) {
+      pendingSessions.append(currentSessionId)
+      UserDefaults.standard.set(pendingSessions, forKey: recoveryKey)
+      NSLog("📋 [ExpoAnalytics] Sessão \(currentSessionId) adicionada às pendentes")
+    }
+  }
+  
+  /// Recupera e envia sessões que não foram enviadas anteriormente
+  private func recoverPendingSessions() {
+    let pendingSessions: [String] = UserDefaults.standard.array(forKey: recoveryKey) as? [String] ?? []
+    
+    guard !pendingSessions.isEmpty else {
+      NSLog("✅ [ExpoAnalytics] Nenhuma sessão pendente para recuperar")
+      return
+    }
+    
+    NSLog("🔄 [ExpoAnalytics] Recuperando \(pendingSessions.count) sessões pendentes...")
+    
+    for sessionId in pendingSessions {
+      recoverAndSendSession(sessionId: sessionId)
+    }
+  }
+  
+  /// Recupera e envia uma sessão específica
+  private func recoverAndSendSession(sessionId: String) {
+    guard let data = UserDefaults.standard.data(forKey: persistenceKey),
+          let sessionData = try? JSONDecoder().decode(PersistentSessionData.self, from: data),
+          sessionData.sessionId == sessionId else {
+      NSLog("⚠️ [ExpoAnalytics] Não foi possível recuperar dados da sessão \(sessionId)")
+      removePendingSession(sessionId: sessionId)
+      return
+    }
+    
+    NSLog("📤 [ExpoAnalytics] Recuperando sessão \(sessionId): \(sessionData.frameCount) frames")
+    
+    // Verificar se arquivos ainda existem
+    let existingPaths = sessionData.screenshotPaths.filter { path in
+      FileManager.default.fileExists(atPath: path)
+    }
+    
+    guard !existingPaths.isEmpty else {
+      NSLog("⚠️ [ExpoAnalytics] Arquivos da sessão \(sessionId) não existem mais")
+      removePendingSession(sessionId: sessionId)
+      return
+    }
+    
+    // Converter userData de volta
+    var originalUserData: [String: Any] = [:]
+    for (key, value) in sessionData.userData {
+      originalUserData[key] = value.value
+    }
+    
+    // Enviar sessão recuperada
+    sendRecoveredSession(
+      sessionId: sessionData.sessionId,
+      userId: sessionData.userId,
+      apiHost: sessionData.apiHost,
+      userData: originalUserData,
+      startTime: sessionData.startTime,
+      frameCount: sessionData.frameCount,
+      screenshotPaths: existingPaths
+    )
+  }
+  
+  /// Envia sessão recuperada para o servidor
+  private func sendRecoveredSession(
+    sessionId: String,
+    userId: String,
+    apiHost: String,
+    userData: [String: Any],
+    startTime: String,
+    frameCount: Int,
+    screenshotPaths: [String]
+  ) {
+    let metadata: [String: Any] = [
+      "userId": userId,
+      "userData": userData,
+      "sessionId": sessionId,
+      "timestamp": Date().timeIntervalSince1970,
+      "sessionDuration": 0, // Não conseguimos calcular precisamente
+      "frameCount": frameCount,
+      "framerate": self.framerate,
+      "format": "zip",
+      "recovered": true,
+      "originalStartTime": startTime
+    ]
+    
+    guard let url = URL(string: apiHost + "/upload-zip") else {
+      NSLog("❌ [ExpoAnalytics] URL inválida para sessão recuperada: \(apiHost)")
+      removePendingSession(sessionId: sessionId)
+      return
+    }
+    
+    // Criar ZIP dos arquivos existentes
+    let fileNames = screenshotPaths.enumerated().map { index, _ in
+      "frame_\(String(format: "%03d", index)).jpg"
+    }
+    
+    guard let zipData = createZipData(filePaths: screenshotPaths, fileNames: fileNames) else {
+      NSLog("❌ [ExpoAnalytics] Erro ao criar ZIP da sessão recuperada")
+      removePendingSession(sessionId: sessionId)
+      return
+    }
+    
+    // Criar requisição multipart
+    let boundary = "Boundary-\(UUID().uuidString)"
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    
+    var body = Data()
+    
+    // Adicionar metadados
+    let metadataJson = try! JSONSerialization.data(withJSONObject: metadata)
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"metadata\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
+    body.append(metadataJson)
+    body.append("\r\n".data(using: .utf8)!)
+    
+    // Adicionar arquivo ZIP
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"screenshots\"; filename=\"recovered_session_\(sessionId).zip\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+    body.append(zipData)
+    body.append("\r\n".data(using: .utf8)!)
+    body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+    
+    request.httpBody = body
+    
+    NSLog("📤 [ExpoAnalytics] Enviando sessão recuperada \(sessionId) (\(zipData.count/1024)KB)")
+    
+    URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+      if let error = error {
+        NSLog("❌ [ExpoAnalytics] Erro ao enviar sessão recuperada: \(error)")
+      } else if let httpResponse = response as? HTTPURLResponse {
+        let statusCode = httpResponse.statusCode
+        if statusCode == 200 {
+          NSLog("✅ [ExpoAnalytics] Sessão recuperada \(sessionId) enviada com sucesso!")
+          self?.removePendingSession(sessionId: sessionId)
+          
+          // Limpar arquivos após envio bem-sucedido
+          for path in screenshotPaths {
+            try? FileManager.default.removeItem(atPath: path)
+          }
+        } else {
+          NSLog("⚠️ [ExpoAnalytics] Sessão recuperada enviada com status \(statusCode)")
+        }
+      }
+    }.resume()
+  }
+  
+  /// Remove sessão da lista de pendentes
+  private func removePendingSession(sessionId: String) {
+    var pendingSessions: [String] = UserDefaults.standard.array(forKey: recoveryKey) as? [String] ?? []
+    pendingSessions.removeAll { $0 == sessionId }
+    UserDefaults.standard.set(pendingSessions, forKey: recoveryKey)
+    
+    // Limpar dados da sessão também
+    UserDefaults.standard.removeObject(forKey: persistenceKey)
+    
+    NSLog("🗑️ [ExpoAnalytics] Sessão \(sessionId) removida das pendentes")
+  }
 }
+
