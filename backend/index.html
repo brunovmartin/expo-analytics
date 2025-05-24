@@ -206,7 +206,7 @@
             const services = [
                 { id: 'api-status', url: '/status' },
                 { id: 'dashboard-status', url: '/dashboard.php' },
-                { id: 'images-status', url: '/view-screenshot.php' }
+                { id: 'images-status', url: '/view-screenshot.php?health=check' }
             ];
 
             for (const service of services) {
@@ -214,7 +214,9 @@
                     const response = await fetch(service.url);
                     const indicator = document.getElementById(service.id);
                     
-                    if (response.ok) {
+                    // Para o servidor de imagens, aceitar erro 400 como "online"
+                    // pois significa que o script está funcionando, apenas sem parâmetros
+                    if (response.ok || (service.id === 'images-status' && response.status === 400)) {
                         indicator.className = 'status-indicator status-online';
                     } else {
                         indicator.className = 'status-indicator status-offline';
